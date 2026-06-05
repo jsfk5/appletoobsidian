@@ -22,6 +22,17 @@ import Foundation
 
 // MARK: - Export Format Converters
 
+enum MarkdownFlavor: Sendable {
+    case standard
+    case obsidian
+}
+
+struct NoteLinkTarget: Sendable {
+    let markdownPath: String
+    let obsidianReference: String
+    let title: String
+}
+
 extension NotesNote {
 
     // MARK: - Public Export Methods
@@ -37,8 +48,15 @@ extension NotesNote {
     /// Convert note to Markdown format
     /// Preserves headings, lists, bold, italic, links, etc.
     /// Requires htmlBody to be available
-    func toMarkdown() -> String {
-        return HTMLToMarkdownConverter.convert(htmlBody ?? "")
+    func toMarkdown(
+        flavor: MarkdownFlavor = .standard,
+        noteLinkTargets: [String: NoteLinkTarget] = [:]
+    ) -> String {
+        return HTMLToMarkdownConverter.convert(
+            htmlBody ?? "",
+            flavor: flavor,
+            noteLinkTargets: noteLinkTargets
+        )
     }
 
     /// Convert note to RTF format
@@ -222,7 +240,11 @@ private struct HTMLToPlainTextConverter {
 // MARK: - Markdown Converter
 
 private struct HTMLToMarkdownConverter {
-    static func convert(_ html: String) -> String {
+    static func convert(
+        _ html: String,
+        flavor: MarkdownFlavor = .standard,
+        noteLinkTargets: [String: NoteLinkTarget] = [:]
+    ) -> String {
         guard let bodyContent = extractBodyContent(html) else {
             return html
         }
@@ -232,6 +254,10 @@ private struct HTMLToMarkdownConverter {
         // Convert code blocks FIRST (before other transformations strip inner tags)
         // Handles <pre> with optional style attributes (e.g. from Apple Notes monospaced blocks)
         result = processCodeBlocks(result)
+
+        // Convert images and links before generic tag stripping.
+        result = processImages(result, flavor: flavor)
+        result = processLinks(result, flavor: flavor, noteLinkTargets: noteLinkTargets)
 
         // Convert inline code
         result = result.replacingOccurrences(of: "<code>([^<]*)</code>",
@@ -271,17 +297,8 @@ private struct HTMLToMarkdownConverter {
                                             with: "[$2]($1)",
                                             options: .regularExpression)
 
-        // Convert lists
-        result = result.replacingOccurrences(of: "<ul>", with: "")
-        result = result.replacingOccurrences(of: "</ul>", with: "\n")
-        result = result.replacingOccurrences(of: "<ul style='list-style-type: square;'>", with: "")
-        result = result.replacingOccurrences(of: "<ul style='list-style-type: none;'>", with: "")
-        result = result.replacingOccurrences(of: "<ol>", with: "")
-        result = result.replacingOccurrences(of: "</ol>", with: "\n")
-
-        // List items
-        result = result.replacingOccurrences(of: "<li>", with: "- ")
-        result = result.replacingOccurrences(of: "</li>", with: "\n")
+        // Convert lists with nesting preserved.
+        result = processLists(result, flavor: flavor, noteLinkTargets: noteLinkTargets)
 
         // Line breaks
         result = result.replacingOccurrences(of: "<br>", with: "\n")
@@ -342,6 +359,545 @@ private struct HTMLToMarkdownConverter {
             return html
         }
         return String(html[bodyStart.upperBound..<bodyEnd.lowerBound])
+    }
+
+    private static func processImages(_ html: String, flavor: MarkdownFlavor) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"<img\b([^>]*?)src=['"]([^'"]+)['"]([^>]*)>"#,
+            options: [.caseInsensitive]
+        ) else {
+            return html
+        }
+
+        let nsString = html as NSString
+        let matches = regex.matches(in: html, options: [], range: NSRange(location: 0, length: nsString.length))
+        var result = html
+
+        for match in matches.reversed() {
+            guard
+                let fullRange = Range(match.range(at: 0), in: result),
+                let srcRange = Range(match.range(at: 2), in: result)
+            else {
+                continue
+            }
+
+            let src = decodeHTMLEntities(String(result[srcRange]))
+            let tagHTML = String(result[fullRange])
+            let alt = attributeValue(named: "alt", in: tagHTML).map(decodeHTMLEntities) ?? ""
+            let replacement = markdownImage(for: src, alt: alt, flavor: flavor)
+            result.replaceSubrange(fullRange, with: replacement)
+        }
+
+        return result
+    }
+
+    private static func processLists(
+        _ html: String,
+        flavor: MarkdownFlavor,
+        noteLinkTargets: [String: NoteLinkTarget]
+    ) -> String {
+        if let indentedListMarkdown = processIndentedListItems(
+            html,
+            flavor: flavor,
+            noteLinkTargets: noteLinkTargets
+        ) {
+            return indentedListMarkdown
+        }
+
+        guard let listRegex = try? NSRegularExpression(
+            pattern: #"<(ul|ol)\b[^>]*>"#,
+            options: [.caseInsensitive]
+        ) else {
+            return html
+        }
+
+        var result = html
+        while true {
+            let nsString = result as NSString
+            guard let match = listRegex.firstMatch(
+                in: result,
+                options: [],
+                range: NSRange(location: 0, length: nsString.length)
+            ),
+            let listRange = Range(match.range(at: 0), in: result),
+            let blockRange = matchingListBlockRange(in: result, from: listRange.lowerBound),
+            let blockHTML = String(result[blockRange]) as String? else {
+                break
+            }
+
+            let markdown = markdownForListBlock(
+                blockHTML,
+                flavor: flavor,
+                noteLinkTargets: noteLinkTargets,
+                indentLevel: 0
+            )
+            result.replaceSubrange(blockRange, with: markdown)
+        }
+
+        return result
+    }
+
+    private static func processIndentedListItems(
+        _ html: String,
+        flavor: MarkdownFlavor,
+        noteLinkTargets: [String: NoteLinkTarget]
+    ) -> String? {
+        guard html.contains("data-indent='") || html.contains("data-indent=\"") else {
+            return nil
+        }
+
+        guard let itemRegex = try? NSRegularExpression(
+            pattern: #"<li\b([^>]*)>(.*?)</li>"#,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else {
+            return nil
+        }
+
+        let nsString = html as NSString
+        let matches = itemRegex.matches(in: html, options: [], range: NSRange(location: 0, length: nsString.length))
+        guard !matches.isEmpty else {
+            return nil
+        }
+
+        var result = html
+        var orderedCounters: [Int: Int] = [:]
+
+        for match in matches.reversed() {
+            guard
+                let fullRange = Range(match.range(at: 0), in: result),
+                let attributesRange = Range(match.range(at: 1), in: html),
+                let contentRange = Range(match.range(at: 2), in: html)
+            else {
+                continue
+            }
+
+            let attributes = String(html[attributesRange])
+            let itemHTML = String(html[contentRange])
+            let indentLevel = listAttributeInt(named: "data-indent", in: attributes) ?? 0
+            let listType = listAttributeInt(named: "data-list-type", in: attributes) ?? 100
+            let indent = String(repeating: "    ", count: max(0, indentLevel))
+
+            orderedCounters = orderedCounters.filter { $0.key <= indentLevel }
+
+            let marker: String
+            if listType == 102 {
+                let next = (orderedCounters[indentLevel] ?? 0) + 1
+                orderedCounters[indentLevel] = next
+                marker = "\(next)."
+            } else {
+                orderedCounters[indentLevel] = 0
+                marker = "-"
+            }
+
+            let text = inlineMarkdown(
+                from: itemHTML,
+                flavor: flavor,
+                noteLinkTargets: noteLinkTargets
+            )
+            let line = text.isEmpty ? "\(indent)\(marker)" : "\(indent)\(marker) \(text)"
+            result.replaceSubrange(fullRange, with: "\(line)\n")
+        }
+
+        result = result.replacingOccurrences(of: #"</?(ul|ol)\b[^>]*>"#, with: "", options: .regularExpression)
+        result = result.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
+        return result
+    }
+
+    private static func listAttributeInt(named name: String, in html: String) -> Int? {
+        guard let regex = try? NSRegularExpression(
+            pattern: "\(NSRegularExpression.escapedPattern(for: name))=['\\\"](\\d+)['\\\"]",
+            options: [.caseInsensitive]
+        ) else {
+            return nil
+        }
+
+        let nsString = html as NSString
+        guard
+            let match = regex.firstMatch(in: html, options: [], range: NSRange(location: 0, length: nsString.length)),
+            let valueRange = Range(match.range(at: 1), in: html)
+        else {
+            return nil
+        }
+
+        return Int(html[valueRange])
+    }
+
+    private static func matchingListBlockRange(in html: String, from start: String.Index) -> Range<String.Index>? {
+        guard let tagEnd = html[start...].firstIndex(of: ">") else {
+            return nil
+        }
+
+        let initialTag = String(html[start...tagEnd]).lowercased()
+        guard initialTag.hasPrefix("<ul") || initialTag.hasPrefix("<ol") else {
+            return nil
+        }
+
+        guard let tokenRegex = try? NSRegularExpression(
+            pattern: #"</?(ul|ol)\b[^>]*>"#,
+            options: [.caseInsensitive]
+        ) else {
+            return nil
+        }
+
+        let searchRange = NSRange(start..<html.endIndex, in: html)
+        let matches = tokenRegex.matches(in: html, options: [], range: searchRange)
+
+        var depth = 0
+        for match in matches {
+            guard let range = Range(match.range(at: 0), in: html) else {
+                continue
+            }
+            let token = String(html[range]).lowercased()
+            if token.hasPrefix("</") {
+                depth -= 1
+                if depth == 0 {
+                    return start..<range.upperBound
+                }
+            } else {
+                depth += 1
+            }
+        }
+
+        return nil
+    }
+
+    private static func markdownForListBlock(
+        _ blockHTML: String,
+        flavor: MarkdownFlavor,
+        noteLinkTargets: [String: NoteLinkTarget],
+        indentLevel: Int
+    ) -> String {
+        guard let openTagEnd = blockHTML.firstIndex(of: ">"),
+              let closeTagStart = blockHTML.range(of: "</", options: .backwards)?.lowerBound else {
+            return blockHTML
+        }
+
+        let openingTag = String(blockHTML[..<blockHTML.index(after: openTagEnd)]).lowercased()
+        let isOrdered = openingTag.hasPrefix("<ol")
+        let innerHTML = String(blockHTML[blockHTML.index(after: openTagEnd)..<closeTagStart])
+        let items = topLevelListItems(from: innerHTML)
+
+        var lines: [String] = []
+        for (index, itemHTML) in items.enumerated() {
+            lines.append(
+                markdownForListItem(
+                    itemHTML,
+                    flavor: flavor,
+                    noteLinkTargets: noteLinkTargets,
+                    indentLevel: indentLevel,
+                    markerIndex: index + 1,
+                    isOrdered: isOrdered
+                )
+            )
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private static func topLevelListItems(from html: String) -> [String] {
+        guard let tokenRegex = try? NSRegularExpression(
+            pattern: #"</?(li|ul|ol)\b[^>]*>"#,
+            options: [.caseInsensitive]
+        ) else {
+            return []
+        }
+
+        let nsString = html as NSString
+        let matches = tokenRegex.matches(in: html, options: [], range: NSRange(location: 0, length: nsString.length))
+        var items: [String] = []
+        var itemStart: String.Index?
+        var liDepth = 0
+
+        for match in matches {
+            guard let range = Range(match.range(at: 0), in: html) else {
+                continue
+            }
+            let token = String(html[range]).lowercased()
+            if token.hasPrefix("<li") {
+                if liDepth == 0 {
+                    itemStart = range.upperBound
+                }
+                liDepth += 1
+            } else if token.hasPrefix("</li") {
+                liDepth -= 1
+                if liDepth == 0, let itemStart {
+                    items.append(String(html[itemStart..<range.lowerBound]))
+                }
+            }
+        }
+
+        return items
+    }
+
+    private static func markdownForListItem(
+        _ itemHTML: String,
+        flavor: MarkdownFlavor,
+        noteLinkTargets: [String: NoteLinkTarget],
+        indentLevel: Int,
+        markerIndex: Int,
+        isOrdered: Bool
+    ) -> String {
+        let indent = String(repeating: "    ", count: indentLevel)
+        let marker = isOrdered ? "\(markerIndex)." : "-"
+        let components = splitListItemComponents(itemHTML)
+        let text = inlineMarkdown(
+            from: components.textHTML,
+            flavor: flavor,
+            noteLinkTargets: noteLinkTargets
+        )
+
+        var lines: [String] = []
+        let firstLine = text.isEmpty ? "\(indent)\(marker)" : "\(indent)\(marker) \(text)"
+        lines.append(firstLine)
+
+        for nestedList in components.nestedLists {
+            let nestedMarkdown = markdownForListBlock(
+                nestedList,
+                flavor: flavor,
+                noteLinkTargets: noteLinkTargets,
+                indentLevel: indentLevel + 1
+            )
+            if !nestedMarkdown.isEmpty {
+                lines.append(nestedMarkdown)
+            }
+        }
+
+        return lines.joined(separator: "\n")
+    }
+
+    private static func splitListItemComponents(_ itemHTML: String) -> (textHTML: String, nestedLists: [String]) {
+        guard let listRegex = try? NSRegularExpression(
+            pattern: #"<(ul|ol)\b[^>]*>"#,
+            options: [.caseInsensitive]
+        ) else {
+            return (itemHTML, [])
+        }
+
+        var remaining = itemHTML
+        var textParts: [String] = []
+        var nestedLists: [String] = []
+
+        while true {
+            let nsString = remaining as NSString
+            guard let match = listRegex.firstMatch(
+                in: remaining,
+                options: [],
+                range: NSRange(location: 0, length: nsString.length)
+            ),
+            let range = Range(match.range(at: 0), in: remaining),
+            let blockRange = matchingListBlockRange(in: remaining, from: range.lowerBound) else {
+                textParts.append(remaining)
+                break
+            }
+
+            textParts.append(String(remaining[..<range.lowerBound]))
+            nestedLists.append(String(remaining[blockRange]))
+            remaining = String(remaining[blockRange.upperBound...])
+        }
+
+        return (textParts.joined(separator: "\n"), nestedLists)
+    }
+
+    private static func inlineMarkdown(
+        from html: String,
+        flavor: MarkdownFlavor,
+        noteLinkTargets: [String: NoteLinkTarget]
+    ) -> String {
+        var result = html
+        result = processImages(result, flavor: flavor)
+        result = processLinks(result, flavor: flavor, noteLinkTargets: noteLinkTargets)
+        result = result.replacingOccurrences(of: "<code>([^<]*)</code>", with: "`$1`", options: .regularExpression)
+        result = result.replacingOccurrences(of: "<b>", with: "**")
+        result = result.replacingOccurrences(of: "</b>", with: "**")
+        result = result.replacingOccurrences(of: "<strong>", with: "**")
+        result = result.replacingOccurrences(of: "</strong>", with: "**")
+        result = result.replacingOccurrences(of: "<i>", with: "*")
+        result = result.replacingOccurrences(of: "</i>", with: "*")
+        result = result.replacingOccurrences(of: "<em>", with: "*")
+        result = result.replacingOccurrences(of: "</em>", with: "*")
+        result = result.replacingOccurrences(of: "<u>", with: "_")
+        result = result.replacingOccurrences(of: "</u>", with: "_")
+        result = result.replacingOccurrences(of: "<s>", with: "~~")
+        result = result.replacingOccurrences(of: "</s>", with: "~~")
+        result = result.replacingOccurrences(of: "<br>", with: "\n")
+        result = result.replacingOccurrences(of: "<br/>", with: "\n")
+        result = result.replacingOccurrences(of: "<br />", with: "\n")
+        result = result.replacingOccurrences(of: "</p>", with: "\n")
+        result = result.replacingOccurrences(of: "<p[^>]*>", with: "", options: .regularExpression)
+        result = stripRemainingTags(result)
+        result = decodeHTMLEntities(result)
+        result = result.replacingOccurrences(of: "\n\\s*\n+", with: "\n", options: .regularExpression)
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func processLinks(
+        _ html: String,
+        flavor: MarkdownFlavor,
+        noteLinkTargets: [String: NoteLinkTarget]
+    ) -> String {
+        guard let regex = try? NSRegularExpression(
+            pattern: #"<a\b([^>]*?)href=['"]([^'"]+)['"]([^>]*)>(.*?)</a>"#,
+            options: [.caseInsensitive, .dotMatchesLineSeparators]
+        ) else {
+            return html
+        }
+
+        let nsString = html as NSString
+        let matches = regex.matches(in: html, options: [], range: NSRange(location: 0, length: nsString.length))
+        var result = html
+
+        for match in matches.reversed() {
+            guard
+                let fullRange = Range(match.range(at: 0), in: result),
+                let hrefRange = Range(match.range(at: 2), in: result),
+                let textRange = Range(match.range(at: 4), in: result)
+            else {
+                continue
+            }
+
+            let href = decodeHTMLEntities(String(result[hrefRange]))
+            let visibleText = decodeHTMLEntities(stripInlineHTML(String(result[textRange])))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let displayText = visibleText.isEmpty ? href : visibleText
+            let replacement: String
+
+            if let target = appleNotesLinkTarget(for: href, noteLinkTargets: noteLinkTargets) {
+                switch flavor {
+                case .standard:
+                    replacement = "[\(displayText)](\(target.markdownPath))"
+                case .obsidian:
+                    replacement = obsidianWikilink(
+                        for: target.obsidianReference,
+                        displayText: displayText,
+                        title: target.title
+                    )
+                }
+            } else {
+                replacement = "[\(displayText)](\(href))"
+            }
+
+            result.replaceSubrange(fullRange, with: replacement)
+        }
+
+        return result
+    }
+
+    private static func markdownImage(for src: String, alt: String, flavor: MarkdownFlavor) -> String {
+        let trimmedAlt = alt.trimmingCharacters(in: .whitespacesAndNewlines)
+        if flavor == .obsidian, isLocalAttachmentPath(src) {
+            return "![[\(src)]]"
+        }
+        return "![\(trimmedAlt)](\(src))"
+    }
+
+    private static func attributeValue(named name: String, in html: String) -> String? {
+        guard let regex = try? NSRegularExpression(
+            pattern: "\(NSRegularExpression.escapedPattern(for: name))=['\"]([^'\"]*)['\"]",
+            options: [.caseInsensitive]
+        ) else {
+            return nil
+        }
+
+        let nsString = html as NSString
+        guard let match = regex.firstMatch(in: html, options: [], range: NSRange(location: 0, length: nsString.length)),
+              let valueRange = Range(match.range(at: 1), in: html) else {
+            return nil
+        }
+
+        return String(html[valueRange])
+    }
+
+    private static func appleNotesLinkTarget(
+        for href: String,
+        noteLinkTargets: [String: NoteLinkTarget]
+    ) -> NoteLinkTarget? {
+        for token in appleNotesTokens(from: href) {
+            if let target = noteLinkTargets[token] {
+                return target
+            }
+            if let target = noteLinkTargets[token.lowercased()] {
+                return target
+            }
+            if let target = noteLinkTargets[token.uppercased()] {
+                return target
+            }
+        }
+        return nil
+    }
+
+    private static func appleNotesTokens(from href: String) -> [String] {
+        let prefixes = [
+            "applenotes://note/",
+            "applenotes:note/"
+        ]
+
+        var tokens: [String] = []
+        for prefix in prefixes where href.hasPrefix(prefix) {
+            let rawRemainder = String(href.dropFirst(prefix.count))
+            let remainder = rawRemainder
+                .components(separatedBy: CharacterSet(charactersIn: "?#& \n\r\t"))
+                .first ?? rawRemainder
+            if !remainder.isEmpty {
+                tokens.append(remainder)
+            }
+        }
+
+        if let components = URLComponents(string: href) {
+            for item in components.queryItems ?? [] {
+                if let value = item.value,
+                   ["identifier", "noteIdentifier", "recordIdentifier", "noteID", "id"].contains(item.name) {
+                    tokens.append(value)
+                }
+            }
+        }
+
+        return tokens
+    }
+
+    private static func isLocalAttachmentPath(_ path: String) -> Bool {
+        !(path.contains("://") || path.hasPrefix("mailto:") || path.hasPrefix("#"))
+    }
+
+    private static func obsidianWikilink(for reference: String, displayText: String, title: String) -> String {
+        let trimmedReference = reference.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedDisplayText = displayText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedDisplayText = trimmedDisplayText.replacingOccurrences(of: "\\", with: "/")
+        let normalizedReference = trimmedReference.replacingOccurrences(of: "\\", with: "/")
+        let lastReferenceComponent = normalizedReference.split(separator: "/").last.map(String.init) ?? normalizedReference
+
+        guard !trimmedReference.isEmpty else {
+            return trimmedDisplayText.isEmpty ? reference : trimmedDisplayText
+        }
+
+        let shouldUsePlainWikilink =
+            trimmedDisplayText.isEmpty ||
+            trimmedDisplayText.caseInsensitiveCompare(trimmedTitle) == .orderedSame ||
+            normalizedDisplayText.caseInsensitiveCompare(normalizedReference) == .orderedSame ||
+            normalizedDisplayText.caseInsensitiveCompare(lastReferenceComponent) == .orderedSame
+
+        if shouldUsePlainWikilink {
+            let alias = trimmedTitle.isEmpty ? lastReferenceComponent : trimmedTitle
+            return "[[\(trimmedReference)|\(alias)]]"
+        }
+
+        return "[[\(trimmedReference)|\(trimmedDisplayText)]]"
+    }
+
+    private static func stripInlineHTML(_ html: String) -> String {
+        html.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+    }
+
+    private static func decodeHTMLEntities(_ text: String) -> String {
+        var result = text
+        result = result.replacingOccurrences(of: "&amp;", with: "&")
+        result = result.replacingOccurrences(of: "&lt;", with: "<")
+        result = result.replacingOccurrences(of: "&gt;", with: ">")
+        result = result.replacingOccurrences(of: "&quot;", with: "\"")
+        result = result.replacingOccurrences(of: "&#39;", with: "'")
+        result = result.replacingOccurrences(of: "&apos;", with: "'")
+        result = result.replacingOccurrences(of: "&nbsp;", with: " ")
+        return result
     }
 
     private static func stripRemainingTags(_ html: String) -> String {

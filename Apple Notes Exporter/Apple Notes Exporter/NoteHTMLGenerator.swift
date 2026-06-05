@@ -127,6 +127,8 @@ class NoteHTMLGenerator {
         var listStack: [(type: Int32, indentLevel: Int32)] = []
         var currentListItemHTML = ""
         var inListItem = false
+        var currentListItemIndentLevel: Int32 = 0
+        var currentListItemType: Int32 = 0
 
         for (_, run) in condensedRuns.enumerated() {
             let length = Int(run.length)
@@ -238,6 +240,8 @@ class NoteHTMLGenerator {
                     if !inListItem {
                         inListItem = true
                         currentListItemHTML = checkboxPrefix
+                        currentListItemIndentLevel = indentLevel
+                        currentListItemType = listType
                     }
 
                     if !part.isEmpty {
@@ -245,7 +249,7 @@ class NoteHTMLGenerator {
                     }
 
                     if !isLastPart {
-                        html += "<li>" + currentListItemHTML + "</li>"
+                        html += "<li data-indent='\(currentListItemIndentLevel)' data-list-type='\(currentListItemType)'>" + currentListItemHTML + "</li>"
                         currentListItemHTML = ""
                         inListItem = false
                     }
@@ -254,7 +258,9 @@ class NoteHTMLGenerator {
                 // Close pending list item
                 if inListItem {
                     let hasContent = currentListItemHTML.trimmingCharacters(in: .whitespacesAndNewlines).count > 2
-                    if hasContent { html += "<li>" + currentListItemHTML + "</li>" }
+                    if hasContent {
+                        html += "<li data-indent='\(currentListItemIndentLevel)' data-list-type='\(currentListItemType)'>" + currentListItemHTML + "</li>"
+                    }
                     currentListItemHTML = ""
                     inListItem = false
                 }
@@ -293,7 +299,9 @@ class NoteHTMLGenerator {
         // Close pending list items and lists
         if inListItem {
             let hasContent = currentListItemHTML.trimmingCharacters(in: .whitespacesAndNewlines).count > 2
-            if hasContent { html += "<li>" + currentListItemHTML + "</li>" }
+            if hasContent {
+                html += "<li data-indent='\(currentListItemIndentLevel)' data-list-type='\(currentListItemType)'>" + currentListItemHTML + "</li>"
+            }
         }
         while !listStack.isEmpty {
             let closed = listStack.removeLast()
@@ -342,12 +350,10 @@ class NoteHTMLGenerator {
         guard let altTextPtr = att.pointee.alt_text else { return nil }
         let altText = String(cString: altTextPtr)
 
-        // For mentions and links, append the token identifier
-        if typeUti == "com.apple.notes.inlinetextattachment.mention" ||
-           typeUti == "com.apple.notes.inlinetextattachment.link" {
+        if typeUti == "com.apple.notes.inlinetextattachment.link" {
             if let tokenPtr = att.pointee.token_identifier {
                 let token = String(cString: tokenPtr)
-                return "\(altText) [\(token)]"
+                return "<a href=\"applenotes://note/\(token.htmlEscaped)\">\(altText.htmlEscaped)</a>"
             }
         }
 

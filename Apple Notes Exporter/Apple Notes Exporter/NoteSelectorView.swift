@@ -302,8 +302,19 @@ struct NoteSelectorView: View {
                             .frame(maxWidth: .infinity, alignment: .center)
                     }
                 } else if viewModel.accountsCount == 0 {
-                    Text("No notes or note accounts were found!")
+                    if let errorMessage = viewModel.loadingState.errorMessage {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label("Unable to load Apple Notes", systemImage: "exclamationmark.triangle.fill")
+                                .foregroundColor(.orange)
+                            Text(errorMessage)
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
                         .frame(maxWidth: .infinity, alignment: .leading)
+                    } else {
+                        Text("No notes or note accounts were found!")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
                 } else {
                     SwiftUI.List {
                         ForEach(viewModel.hierarchy.accounts) { accountNode in
@@ -320,7 +331,7 @@ struct NoteSelectorView: View {
             HStack {
                 HStack {
                     Image(systemName: "info.circle")
-                    Text("Notes that are locked with a password cannot be exported.")
+                    Text("Locked notes export with their title and a placeholder body until they are unlocked in Apple Notes.")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 

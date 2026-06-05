@@ -1,125 +1,138 @@
-# Apple Notes Exporter (apple-notes-exporter)
+# Apple to Obsidian
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![macOS 11.0+](https://img.shields.io/badge/macOS-11.0%2B-brightgreen.svg)](https://www.apple.com/macos/)
-[![Latest Release](https://img.shields.io/github/v/release/kzaremski/apple-notes-exporter)](https://github.com/kzaremski/apple-notes-exporter/releases/latest)
-[![GitHub Downloads](https://img.shields.io/github/downloads/kzaremski/apple-notes-exporter/total)](https://github.com/kzaremski/apple-notes-exporter/releases)
-[![GitHub Stars](https://img.shields.io/github/stars/kzaremski/apple-notes-exporter)](https://github.com/kzaremski/apple-notes-exporter/stargazers)
-[![GitHub Issues](https://img.shields.io/github/issues/kzaremski/apple-notes-exporter)](https://github.com/kzaremski/apple-notes-exporter/issues)
-[![Last Commit](https://img.shields.io/github/last-commit/kzaremski/apple-notes-exporter)](https://github.com/kzaremski/apple-notes-exporter/commits/main)
-[![Code Size](https://img.shields.io/github/languages/code-size/kzaremski/apple-notes-exporter)](https://github.com/kzaremski/apple-notes-exporter)
 [![Swift](https://img.shields.io/badge/Swift-5-orange.svg)](https://swift.org/)
+[![Last Commit](https://img.shields.io/github/last-commit/jsfk5/appletoobsidian)](https://github.com/jsfk5/appletoobsidian/commits/main)
 
-MacOS app written in Swift that bulk exports Apple Notes (including iCloud Notes) to a multitude of formats preserving note folder structure.
+Apple to Obsidian is a macOS app for exporting and continuously syncing Apple Notes into an Obsidian vault as Markdown, with folder structure, attachments, inline images, and Apple Notes note links preserved in an Obsidian-friendly form.
 
-![Screenshot of version 1.1 of the Apple Notes Exporter](screenshots/v1.1.png)
+This repository is a GPL-3.0 fork of [kzaremski/apple-notes-exporter](https://github.com/kzaremski/apple-notes-exporter). The original project is a Swift macOS app for bulk exporting Apple Notes to multiple formats. This fork keeps that foundation, gives full credit to the upstream work, and focuses the roadmap specifically on one job: making Apple Notes to Obsidian migration and ongoing sync reliable.
 
-## Purpose & Rationale
+## Why this fork exists
 
-Many choose to do all of their note taking and planning through Apple Notes because of the simplicity and convenience that it offers. Unfortunately, there is no good workflow or mechanism built into Apple Notes that allows you to export all your notes or a group of your notes at once.  This app provides a fast, efficient way to export your entire notes library while maintaining the folder hierarchy and preserving formatting.
+Apple Notes is excellent for quick capture, but many people want their long-term notes in a local Markdown knowledge base. A one-time export helps, but it is not enough when Apple Notes remains the daily inbox. This fork is tuned for that real workflow:
 
-## Export Formats
-* **HTML**
-    * Native format returned by the Apple Notes database.
-    * HTML format can be used to publish to the web or store locally.
-    * Images are included inline using the HTML base64 embed syntax.
-    * Portable between browsers and formats well when printed.
-    * **Configurable:** Font family, font size, and margins
-* **PDF**
-    * Portable document format generated from HTML.
-    * Preserves all formatting and images.
-    * Perfect for sharing and archiving.
-    * **Configurable:** Font family, font size, margins, and page size (Letter, A4, A5, Legal, Tabloid)
-* **TEX**
-    * LaTeX format for typesetting.
-    * Can be compiled using the LaTeX typesetting software.
-    * Notes can be compiled individually or many can be included within a single document.
-    * **Configurable:** Custom template with placeholders for title, dates, author, and content
-* **MD**
-    * Markdown format.
-    * Useful if moving to other Markdown-based note taking apps like Obsidian.
-    * Images are included inline using the HTML base64 embed syntax.
-* **RTF**
-    * Rich text format.
-    * Can be opened with WordPad on Windows or TextEdit on MacOS.
-    * Preserves formatting however there are no inline attachments or images.
-    * **Configurable:** Font family and font size
-* **TXT**
-    * Plain text format.
-    * No images or formatting.
+- keep writing and moving notes in Apple Notes
+- run a repeatable sync into an Obsidian vault
+- preserve note hierarchy and attachments
+- convert Apple Notes links into Obsidian note links
+- remove exported notes when the source notes are deleted or moved out of scope
+- avoid exporting Apple Notes' Recently Deleted folder
 
-Attachments are always saved in a folder corresponding to the name/title of the note that they are associated with.
+The goal is not to become a general-purpose document exporter. The goal is to become the most dependable Apple Notes to Obsidian bridge.
 
-## Compatibility & System Requirements
-* MacOS Big Sur 11.0 or higher
-    * Some of the features that I am using are not available in earlier MacOS versions.
-    * I was able to backport from Ventura back to Big Sur, but any further would have required rewrites of the UI because of the changes made to the MacOS UI at that time.
-* Intel or Apple Silicon Mac
-* 4GB RAM minimum
-    * Optimized database-driven approach uses approximately 200MB of RAM regardless of Notes library size
-    * Concurrent export processing for maximum performance
-* Disk Space
-    * 20MB to accommodate the app itself
-    * Additional space for your exported notes and their attachments
+## Current Obsidian-focused changes
+
+Compared with the upstream Apple Notes Exporter base, this fork adds and/or tunes:
+
+- Obsidian Markdown export mode with Apple Notes links converted to Obsidian wikilinks.
+- Markdown image handling that emits Obsidian-friendly inline image references instead of leaving broken placeholder links.
+- Attachment migration that writes files beside the exported note and keeps image references connected.
+- Title and filename normalization for names that include characters like `/`, so display titles can preserve meaning while exported paths stay filesystem-safe.
+- Incremental sync fingerprints that include export settings, note content, account, and folder identity.
+- Move detection so notes moved between Apple Notes folders are relocated in the exported vault tree.
+- Mirror-style stale cleanup for notes deleted from Apple Notes.
+- Recently Deleted exclusion so deleted Apple Notes are not treated as active notes.
+- Cleanup for untracked legacy Markdown exports and orphan attachment/resource folders under the configured export root.
+- Safer automation behavior for nightly syncs using the app executable directly instead of click automation.
+- More visible permission guidance when macOS Full Disk Access blocks the Notes database.
+- Regression coverage for Obsidian link conversion, path normalization, sync cleanup, and move-sensitive fingerprints.
+
+## Sync behavior
+
+Incremental sync treats Apple Notes as the source of truth. On each sync, the exporter:
+
+1. Reads the local Apple Notes database.
+2. Skips notes in Recently Deleted.
+3. Exports new or changed notes.
+4. Re-exports notes when Obsidian-specific output settings or folder placement changed.
+5. Removes stale files previously exported for notes that no longer exist in the active Apple Notes set.
+6. Removes verified orphan attachment/resource folders inside the export root.
+
+Cleanup is scoped to the configured output folder. The app should not touch files outside the selected export root.
+
+## Requirements
+
+- macOS Big Sur 11.0 or later
+- Intel or Apple Silicon Mac
+- Xcode for building from source
+- Full Disk Access for the built app, because Apple Notes stores its data in protected local databases
+
+## Build from source
+
+```sh
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+xcodebuild \
+  -project "Apple Notes Exporter/Apple Notes Exporter.xcodeproj" \
+  -scheme "Apple Notes Exporter" \
+  -configuration Debug \
+  -derivedDataPath /tmp/apple-notes-exporter-deriveddata \
+  build
+```
+
+The app bundle remains named `Apple Notes Exporter.app` for now while the fork is being stabilized. A public-facing rename is part of the roadmap.
+
+## Full Disk Access
+
+macOS protects the Apple Notes database. If the app reports zero notes or fails with a SQLite authorization error, add the exact app bundle you are running to:
+
+`System Settings -> Privacy & Security -> Full Disk Access`
+
+If you replace the app in `/Applications`, macOS may require you to remove and re-add the new bundle.
+
+## Automation
+
+For nightly syncs, prefer running the built app or a wrapper script directly from a LaunchAgent. Do not automate the GUI with coordinate-based click tools; the app state and window position are too easy to break.
+
+Example wrapper shape:
+
+```sh
+"/Applications/Apple Notes Exporter.app/Contents/MacOS/Apple Notes Exporter"
+```
+
+## Relationship to upstream
+
+This fork starts from [Apple Notes Exporter](https://github.com/kzaremski/apple-notes-exporter), created by Konstantin Zaremski. The upstream project supports broad export formats and general Apple Notes export use cases. Apple to Obsidian narrows that into an Obsidian-first workflow and keeps the same GPL-3.0 license.
+
+Upstream work, contributors, and research remain credited. Useful fixes here may be suitable for upstream pull requests where they also help the broader exporter.
+
+## Open source maintenance focus
+
+This repository is being published as an active GPL-3.0 fork with a concrete maintainer workflow:
+
+- keep the project public and buildable
+- document Apple Notes schema and permission pitfalls as they are discovered
+- accept reproducible bug reports around broken note links, attachments, move detection, and sync cleanup
+- use AI-assisted maintenance for code review, regression tests, release prep, and issue triage
+- keep user data local; the exporter reads the macOS Notes database and writes Markdown files to a chosen local output folder
+
+## Roadmap
+
+- Rename the app bundle and UI from Apple Notes Exporter to Apple to Obsidian.
+- Add a dedicated command-line sync command with explicit output arguments.
+- Add release packaging and notarization for public downloads.
+- Add a safer first-run setup flow for Obsidian vault selection.
+- Expand tests around Apple Notes schema changes across macOS releases.
+- Document known limitations with locked notes, shared notes, and non-iCloud accounts.
 
 ## Limitations
-As of version 1.0, Apple Notes Exporter no longer supports exporting from accounts other than iCloud accounts and the On My Mac account. This includes notes stored in Gmail, Yahoo, Outlook, and other email-based accounts.
 
-### Workaround for Email Account Notes
-If you have notes in Gmail, Yahoo, Outlook, or other email accounts that you want to export:
-
-1. Open the Apple Notes app
-2. Select the notes you want to export from your email account
-3. Drag and drop them into a folder under "On My Mac" or one of your iCloud accounts
-4. Once moved, these notes will be accessible to Apple Notes Exporter and can be included in your export
-
-This limitation is due to the database-driven approach used in version 1.0, which queries the local Notes database directly. Email-based note accounts store their data differently and are not included in the same database structure that iCloud and On My Mac accounts use.
-
-## Additional Screenshots
-
-**Note Selection**
-![Note Selection](screenshots/v1.0_selection.png)
-
-**Export Progress**
-![Export Progress](screenshots/v1.1_export_progress.png)
-
-**Export Complete**
-![Export Complete](screenshots/v1.1_export_done.png)
-
-**Detailed Export Log**
-![Export Log](screenshots/v1.0_export_log.png)
-
-**PDF Export Options**
-![PDF Options](screenshots/v1.0_pdf_options.png)
-
-**LaTeX Template Editor**
-![LaTeX Options](screenshots/v1.0_tex_options.png)
-
-## Installation
-The latest download is available from the Github "Releases" tab.
-
-Make sure that you have "App Store and Identified Developers" set as your app install sources in the "Privacy & Security" section of System Settings in MacOS.
-
-**As of Version 0.4 Build 5, we are distributing a notarized executable.** *For older versions, go to the "Privacy & Security" pane of System Settings and click "Open Anyway" under the "Security" section towards the bottom of the pane. See Apple's article https://support.apple.com/en-us/HT202491 if you need more help or a better explanation on how to make an exception for the app to run.*
-
-## Acknowledgements
-
-This project benefited from the groundwork and research done by [threeplanetssoftware](https://github.com/threeplanetssoftware) on Apple Notes protobuf formats and database parsing in their [apple_cloud_notes_parser](https://github.com/threeplanetssoftware/apple_cloud_notes_parser) project. Their work was instrumental in understanding the Apple Notes database structure, enabling the transition from AppleScript-based export to the more efficient database-driven approach used in version 1.0.
+- Apple Notes is not a public export API. This project reads local Notes database files, so macOS and Apple Notes schema changes can break behavior.
+- The app needs Full Disk Access.
+- Email-backed Notes accounts may not live in the same local database shape as iCloud and On My Mac notes.
+- This is not affiliated with Apple, Obsidian, or OpenAI.
 
 ## License
 
-This program is free software: you can redistribute it and/or modify it under the terms of the GNU General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+This project is free software under the GNU General Public License v3.0. See [LICENSE](LICENSE) for the full license text.
 
-This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for more details.
+Original project:
 
-You should have received a copy of the GNU General Public License along with this program. If not, see <https://www.gnu.org/licenses/>.
-
-```
+```text
 Apple Notes Exporter
 Copyright (C) 2026 Konstantin Zaremski
 Licensed under the GNU General Public License v3.0
 ```
 
-## Star History
-
-[![Star History Chart](https://api.star-history.com/svg?repos=kzaremski/apple-notes-exporter&type=date&legend=top-left)](https://www.star-history.com/#kzaremski/apple-notes-exporter&type=date&legend=top-left)
+Fork-specific changes are made available under the same GPL-3.0 license.

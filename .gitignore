@@ -41,6 +41,11 @@ build/
 .DS_Store
 *.xcuserstate
 xcuserdata/
+DerivedData/
+*.xcresult
+*.profraw
+Products/
+Apple Notes Exporter/Products/
 
 build.log
 

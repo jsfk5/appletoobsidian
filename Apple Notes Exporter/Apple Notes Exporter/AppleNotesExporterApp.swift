@@ -20,10 +20,24 @@
 
 import SwiftUI
 import OSLog
+import Darwin
 
 // ** Declare Constants
 // App version and capability
 let APP_VERSION = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String
+let BUILD_MARKER: String = {
+    guard
+        let executableURL = Bundle.main.executableURL,
+        let resourceValues = try? executableURL.resourceValues(forKeys: [.contentModificationDateKey]),
+        let buildDate = resourceValues.contentModificationDate
+    else {
+        return "unknown build"
+    }
+
+    let formatter = DateFormatter()
+    formatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+    return formatter.string(from: buildDate)
+}()
 let OUTPUT_FORMATS: [String] = [
     "HTML",
     "PDF",
@@ -64,6 +78,97 @@ extension Scene {
 class AppDelegate: NSObject, NSApplicationDelegate {    
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         return true
+    }
+}
+
+fileprivate struct LaunchExportOptions {
+    let outputURL: URL
+    let format: ExportFormat
+    let incrementalSync: Bool
+    let includeAttachments: Bool
+    let quitWhenDone: Bool
+
+    static func parse(arguments: [String]) -> LaunchExportOptions? {
+        let hasExportFlag = arguments.contains("--export")
+        let hasExportOptions = arguments.contains("--output") || arguments.contains("--format") || arguments.contains("--incremental")
+        guard hasExportFlag || hasExportOptions else {
+            return nil
+        }
+
+        var outputPath: String?
+        var format: ExportFormat = .markdown
+        var incrementalSync = false
+        var includeAttachments = true
+        var quitWhenDone = true
+
+        var index = 1
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--output":
+                if index + 1 < arguments.count {
+                    outputPath = arguments[index + 1]
+                    index += 1
+                }
+            case "--format":
+                if index + 1 < arguments.count {
+                    format = exportFormat(from: arguments[index + 1]) ?? format
+                    index += 1
+                }
+            case "--incremental":
+                incrementalSync = true
+            case "--no-incremental":
+                incrementalSync = false
+            case "--attachments":
+                includeAttachments = true
+            case "--no-attachments":
+                includeAttachments = false
+            case "--keep-open":
+                quitWhenDone = false
+            default:
+                break
+            }
+            index += 1
+        }
+
+        guard let outputPath, !outputPath.isEmpty else {
+            writeStandardError("Apple Notes Exporter: --output is required for command-line export.")
+            return nil
+        }
+
+        return LaunchExportOptions(
+            outputURL: URL(fileURLWithPath: NSString(string: outputPath).expandingTildeInPath),
+            format: format,
+            incrementalSync: incrementalSync,
+            includeAttachments: includeAttachments,
+            quitWhenDone: quitWhenDone
+        )
+    }
+
+    private static func exportFormat(from rawValue: String) -> ExportFormat? {
+        switch rawValue.lowercased() {
+        case "html": return .html
+        case "pdf": return .pdf
+        case "tex", "latex": return .tex
+        case "md", "markdown": return .markdown
+        case "rtf": return .rtf
+        case "txt", "text": return .txt
+        default: return ExportFormat(rawValue: rawValue.uppercased())
+        }
+    }
+}
+
+fileprivate func writeStandardError(_ message: String) {
+    FileHandle.standardError.write(Data((message + "\n").utf8))
+}
+
+fileprivate func finishLaunchExport(_ options: LaunchExportOptions, status: Int32) {
+    guard options.quitWhenDone else { return }
+
+    if status == 0 {
+        NSApp.terminate(nil)
+    } else {
+        exit(status)
     }
 }
 
@@ -155,6 +260,56 @@ class AppleNotesExporterState: ObservableObject {
         }
     }
 
+    fileprivate func runLaunchExport(_ options: LaunchExportOptions) async {
+        guard licenseAccepted else {
+            writeStandardError("Apple Notes Exporter: license and Full Disk Access setup must be completed in the app before command-line export can run.")
+            finishLaunchExport(options, status: 1)
+            return
+        }
+
+        await notesViewModel.reload()
+        updateCounts()
+
+        if let errorMessage = notesViewModel.loadingState.errorMessage {
+            writeStandardError("Apple Notes Exporter: unable to load Apple Notes. \(errorMessage)")
+            finishLaunchExport(options, status: 1)
+            return
+        }
+
+        let notes = notesViewModel.selectedNotes
+        guard !notes.isEmpty else {
+            writeStandardError("Apple Notes Exporter: no notes were found to export.")
+            finishLaunchExport(options, status: 1)
+            return
+        }
+
+        exportViewModel.configurations.incrementalSync = options.incrementalSync
+        exportViewModel.configurations.includeAttachments = options.includeAttachments
+        exportViewModel.saveConfigurations()
+
+        await exportViewModel.exportNotes(
+            notes,
+            toDirectory: options.outputURL,
+            format: options.format,
+            includeAttachments: options.includeAttachments
+        )
+
+        switch exportViewModel.exportState {
+        case .completed(let statistics):
+            print("Apple Notes Exporter: exported \(statistics.successfulNotes) notes, \(statistics.failedNotes) failed notes, \(statistics.failedAttachments) failed attachments.")
+            finishLaunchExport(options, status: statistics.failedNotes == 0 && statistics.failedAttachments == 0 ? 0 : 1)
+        case .error(let message):
+            writeStandardError("Apple Notes Exporter: export failed. \(message)")
+            finishLaunchExport(options, status: 1)
+        case .cancelled:
+            writeStandardError("Apple Notes Exporter: export cancelled.")
+            finishLaunchExport(options, status: 1)
+        default:
+            finishLaunchExport(options, status: 1)
+            break
+        }
+    }
+
     private func updateCounts() {
         selectedNotesCount = notesViewModel.selectedCount
 
@@ -171,11 +326,15 @@ struct Apple_Notes_ExporterApp: App {
     // New ViewModels
     @StateObject private var notesViewModel = NotesViewModel()
     @StateObject private var exportViewModel = ExportViewModel()
+    @State private var didRunLaunchExport = false
 
     // Legacy compatibility state
     @ObservedObject var sharedState: AppleNotesExporterState
+    private let launchExportOptions: LaunchExportOptions?
 
     init() {
+        launchExportOptions = LaunchExportOptions.parse(arguments: ProcessInfo.processInfo.arguments)
+
         // Initialize ViewModels first
         let notesVM = NotesViewModel()
         let exportVM = ExportViewModel()
@@ -193,12 +352,24 @@ struct Apple_Notes_ExporterApp: App {
 
     var body: some Scene {
         WindowGroup(id: "main") {
-            AppleNotesExporterView(sharedState: sharedState)
-                .environmentObject(notesViewModel)
-                .environmentObject(exportViewModel)
-                .onAppear {
-                    NSWindow.allowsAutomaticWindowTabbing = false
-                }
+            if let launchExportOptions {
+                SwiftUI.Color.clear
+                    .frame(width: 1, height: 1)
+                    .onAppear {
+                        guard !didRunLaunchExport else { return }
+                        didRunLaunchExport = true
+                        Task {
+                            await sharedState.runLaunchExport(launchExportOptions)
+                        }
+                    }
+            } else {
+                AppleNotesExporterView(sharedState: sharedState)
+                    .environmentObject(notesViewModel)
+                    .environmentObject(exportViewModel)
+                    .onAppear {
+                        NSWindow.allowsAutomaticWindowTabbing = false
+                    }
+            }
         }
         .commands {
             CommandGroup(replacing: .newItem) {

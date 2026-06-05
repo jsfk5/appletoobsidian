@@ -159,6 +159,22 @@ struct ane_db {
 #define ANE_BUF_PATH  1021   /* filesystem path buffers */
 #define ANE_BUF_SQL   2039   /* SQL statement buffers */
 
+static char g_ane_last_error[ANE_BUF_SQL];
+
+static void _set_last_error(const char *message)
+{
+    if (!message) {
+        g_ane_last_error[0] = '\0';
+        return;
+    }
+    snprintf(g_ane_last_error, sizeof(g_ane_last_error), "%s", message);
+}
+
+const char *ane_last_error_message(void)
+{
+    return g_ane_last_error[0] ? g_ane_last_error : NULL;
+}
+
 /* ── String helpers ────────────────────────────────────────── */
 
 static char *_strdup_col(sqlite3_stmt *stmt, int col)
@@ -406,6 +422,7 @@ static void _prepare_statements(ane_db *db)
         /* STMT_LEGACY_NOTES */
         snprintf(sql, sizeof(sql),
             "SELECT  ZNOTE.Z_PK, "
+            "NULL AS ZIDENTIFIER, "
             "ZNOTE.ZCREATIONDATE AS ZCREATIONDATE1, "
             "ZNOTE.ZMODIFICATIONDATE AS ZMODIFICATIONDATE1, "
             "ZNOTE.ZTITLE AS ZTITLE1, "
@@ -449,6 +466,7 @@ static void _prepare_statements(ane_db *db)
         /* iOS 11: three-table join via Z_11NOTES */
         snprintf(sql, sizeof(sql),
             "SELECT  ZICCLOUDSYNCINGOBJECT.Z_PK, "
+            "ZICCLOUDSYNCINGOBJECT.ZIDENTIFIER AS NOTE_IDENTIFIER, "
             "ZICCLOUDSYNCINGOBJECT.%s AS TITLE, "
             "ZICCLOUDSYNCINGOBJECT.%s AS CREATION_DATE, "
             "ZICCLOUDSYNCINGOBJECT.%s AS MODIFICATION_DATE, "
@@ -468,7 +486,7 @@ static void _prepare_statements(ane_db *db)
     } else {
         /* iOS 12+: standard two-table join */
         snprintf(sql, sizeof(sql),
-            "SELECT  note.Z_PK, note.%s AS TITLE, "
+            "SELECT  note.Z_PK, note.ZIDENTIFIER AS NOTE_IDENTIFIER, note.%s AS TITLE, "
             "note.%s AS CREATION_DATE, "
             "note.%s AS MODIFICATION_DATE, "
             "note.%s AS FOLDER_ID, "
@@ -479,20 +497,19 @@ static void _prepare_statements(ane_db *db)
             "LEFT JOIN ZICNOTEDATA data ON note.Z_PK = data.ZNOTE "
             "WHERE 1=1 AND note.Z_ENT = (SELECT Z_ENT FROM Z_PRIMARYKEY WHERE Z_NAME = 'ICNote') "
             "AND (note.ZMARKEDFORDELETION IS NULL OR note.ZMARKEDFORDELETION = 0)"
-            "%s /*ank*/;",
+            " /*ank*/;",
             title_col, creation_col, modification_col, folder_col,
             account_col ? "note." : "",
             account_col ? account_col : "NULL",
             has_pinned ? "note.ZISPINNED" : "0 AS ZISPINNED",
-            has_password ? ", note.ZPASSWORDPROTECTED" : "",
-            has_password ? " AND (note.ZPASSWORDPROTECTED IS NULL OR note.ZPASSWORDPROTECTED = 0)" : "");
+            has_password ? ", note.ZPASSWORDPROTECTED" : "");
     }
     sqlite3_prepare_v2(db->sqlite, sql, -1, &db->stmts[STMT_NOTES], NULL);
 
     /* STMT_NOTES_RANGE -- date-filtered variant (modern only, not iOS 11) */
     if (!is_ios11) {
         snprintf(sql, sizeof(sql),
-            "SELECT  note.Z_PK, note.%s AS TITLE, "
+            "SELECT  note.Z_PK, note.ZIDENTIFIER AS NOTE_IDENTIFIER, note.%s AS TITLE, "
             "note.%s AS CREATION_DATE, "
             "note.%s AS MODIFICATION_DATE, "
             "note.%s AS FOLDER_ID, "
@@ -504,14 +521,13 @@ static void _prepare_statements(ane_db *db)
             "WHERE 1=1 AND note.Z_ENT = (SELECT Z_ENT FROM Z_PRIMARYKEY WHERE Z_NAME = 'ICNote') "
             "AND (note.ZMARKEDFORDELETION IS NULL OR note.ZMARKEDFORDELETION = 0) "
             "AND note.%s >= ? AND note.%s <= ?"
-            "%s /*ank*/;",
+            " /*ank*/;",
             title_col, creation_col, modification_col, folder_col,
             account_col ? "note." : "",
             account_col ? account_col : "NULL",
             has_pinned ? "note.ZISPINNED" : "0 AS ZISPINNED",
             has_password ? ", note.ZPASSWORDPROTECTED" : "",
-            modification_col, modification_col,
-            has_password ? " AND (note.ZPASSWORDPROTECTED IS NULL OR note.ZPASSWORDPROTECTED = 0)" : "");
+            modification_col, modification_col);
         sqlite3_prepare_v2(db->sqlite, sql, -1, &db->stmts[STMT_NOTES_RANGE], NULL);
     }
 
@@ -708,9 +724,14 @@ static void _finalize_statements(ane_db *db)
 
 ane_db *ane_open(const char *db_path)
 {
+    _set_last_error(NULL);
+
     if (!db_path) {
         const char *home = getenv("HOME");
-        if (!home) return NULL;
+        if (!home) {
+            _set_last_error("Unable to resolve HOME while locating NoteStore.sqlite.");
+            return NULL;
+        }
 
         char default_path[ANE_BUF_PATH];
         snprintf(default_path, sizeof(default_path),
@@ -720,16 +741,27 @@ ane_db *ane_open(const char *db_path)
     }
 
     ane_db *db = (ane_db *)calloc(1, sizeof(ane_db));
-    if (!db) return NULL;
+    if (!db) {
+        _set_last_error("Failed to allocate database handle.");
+        return NULL;
+    }
 
     db->db_path = strdup(db_path);
     if (!db->db_path) {
+        _set_last_error("Failed to copy Notes database path.");
         free(db);
         return NULL;
     }
 
-    if (sqlite3_open_v2(db->db_path, &db->sqlite,
-                         SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
+    int open_result = sqlite3_open_v2(db->db_path, &db->sqlite,
+                                      SQLITE_OPEN_READONLY, NULL);
+    if (open_result != SQLITE_OK) {
+        const char *sqlite_error = db->sqlite ? sqlite3_errmsg(db->sqlite) : "unknown sqlite error";
+        snprintf(g_ane_last_error, sizeof(g_ane_last_error),
+                 "Failed to open Notes database at '%s' (SQLite %d: %s).",
+                 db->db_path, open_result, sqlite_error);
+        if (db->sqlite)
+            sqlite3_close(db->sqlite);
         free(db->db_path);
         free(db);
         return NULL;
@@ -975,33 +1007,34 @@ static ane_note *_fetch_notes_impl(ane_db *db, sqlite3_stmt *stmt,
 
         ane_note *n = &notes[*count];
         n->pk = sqlite3_column_int64(stmt, 0);
-        n->title = _strdup_col(stmt, 1);
-        n->creation_date = sqlite3_column_double(stmt, 2);
-        n->modification_date = sqlite3_column_double(stmt, 3);
+        n->identifier = _strdup_col(stmt, 1);
+        n->title = _strdup_col(stmt, 2);
+        n->creation_date = sqlite3_column_double(stmt, 3);
+        n->modification_date = sqlite3_column_double(stmt, 4);
         n->folder_title = NULL;
         n->account_name = NULL;
         n->account_identifier = NULL;
         n->is_legacy = 0;
 
-        /* FOLDER_ID -- column 4 */
-        n->folder_pk = (sqlite3_column_type(stmt, 4) == SQLITE_NULL)
-            ? -1
-            : sqlite3_column_int64(stmt, 4);
-
-        /* ACCOUNT_FK -- column 5 */
-        n->account_pk = (sqlite3_column_type(stmt, 5) == SQLITE_NULL)
+        /* FOLDER_ID -- column 5 */
+        n->folder_pk = (sqlite3_column_type(stmt, 5) == SQLITE_NULL)
             ? -1
             : sqlite3_column_int64(stmt, 5);
 
-        /* ZDATA (protobuf blob) -- column 6 for modern */
-        n->protobuf_data = _blobdup_col(stmt, 6, &n->protobuf_len);
+        /* ACCOUNT_FK -- column 6 */
+        n->account_pk = (sqlite3_column_type(stmt, 6) == SQLITE_NULL)
+            ? -1
+            : sqlite3_column_int64(stmt, 6);
 
-        /* ZISPINNED -- column 7 for modern */
-        n->is_pinned = sqlite3_column_int(stmt, 7);
+        /* ZDATA (protobuf blob) -- column 7 for modern */
+        n->protobuf_data = _blobdup_col(stmt, 7, &n->protobuf_len);
 
-        /* ZPASSWORDPROTECTED -- column 8 if present */
+        /* ZISPINNED -- column 8 for modern */
+        n->is_pinned = sqlite3_column_int(stmt, 8);
+
+        /* ZPASSWORDPROTECTED -- column 9 if present */
         n->is_password_protected = has_password
-            ? sqlite3_column_int(stmt, 8)
+            ? sqlite3_column_int(stmt, 9)
             : 0;
 
         (*count)++;
@@ -1035,18 +1068,19 @@ static ane_note *_fetch_legacy_notes(ane_db *db, size_t *count)
 
         ane_note *n = &notes[*count];
         n->pk = sqlite3_column_int64(stmt, 0);
+        n->identifier = _strdup_col(stmt, 1);
         /*
          * Legacy query column order:
-         *  0: Z_PK, 1: ZCREATIONDATE1, 2: ZMODIFICATIONDATE1,
-         *  3: ZTITLE1, 4: ZDATA (raw text), 5: ZFOLDER,
-         *  6: ZACCOUNT, 7: ZISPINNED (always 0)
+         *  0: Z_PK, 1: ZIDENTIFIER, 2: ZCREATIONDATE1, 3: ZMODIFICATIONDATE1,
+         *  4: ZTITLE1, 5: ZDATA (raw text), 6: ZFOLDER,
+         *  7: ZACCOUNT, 8: ZISPINNED (always 0)
          */
-        n->creation_date = sqlite3_column_double(stmt, 1);
-        n->modification_date = sqlite3_column_double(stmt, 2);
-        n->title = _strdup_col(stmt, 3);
+        n->creation_date = sqlite3_column_double(stmt, 2);
+        n->modification_date = sqlite3_column_double(stmt, 3);
+        n->title = _strdup_col(stmt, 4);
 
         /* Legacy ZDATA is raw text content, not gzipped protobuf */
-        const unsigned char *text = sqlite3_column_text(stmt, 4);
+        const unsigned char *text = sqlite3_column_text(stmt, 5);
         if (text) {
             size_t len = strlen((const char *)text);
             n->protobuf_data = (uint8_t *)malloc(len);
@@ -1066,13 +1100,13 @@ static ane_note *_fetch_legacy_notes(ane_db *db, size_t *count)
         n->is_pinned = 0;
         n->is_legacy = 1;
 
-        /* Legacy columns: 5=ZFOLDER (ZSTORE.Z_PK), 6=ZACCOUNT */
-        n->folder_pk = (sqlite3_column_type(stmt, 5) == SQLITE_NULL)
-            ? -1
-            : sqlite3_column_int64(stmt, 5);
-        n->account_pk = (sqlite3_column_type(stmt, 6) == SQLITE_NULL)
+        /* Legacy columns: 6=ZFOLDER (ZSTORE.Z_PK), 7=ZACCOUNT */
+        n->folder_pk = (sqlite3_column_type(stmt, 6) == SQLITE_NULL)
             ? -1
             : sqlite3_column_int64(stmt, 6);
+        n->account_pk = (sqlite3_column_type(stmt, 7) == SQLITE_NULL)
+            ? -1
+            : sqlite3_column_int64(stmt, 7);
 
         (*count)++;
     }
@@ -1139,28 +1173,29 @@ ane_note *ane_fetch_notes_in_range(ane_db *db,
 
         ane_note *n = &notes[*count];
         n->pk = sqlite3_column_int64(stmt, 0);
-        n->title = _strdup_col(stmt, 1);
-        n->creation_date = sqlite3_column_double(stmt, 2);
-        n->modification_date = sqlite3_column_double(stmt, 3);
+        n->identifier = _strdup_col(stmt, 1);
+        n->title = _strdup_col(stmt, 2);
+        n->creation_date = sqlite3_column_double(stmt, 3);
+        n->modification_date = sqlite3_column_double(stmt, 4);
         n->folder_title = NULL;
         n->account_name = NULL;
         n->account_identifier = NULL;
         n->is_legacy = 0;
 
-        /* FOLDER_ID -- column 4 */
-        n->folder_pk = (sqlite3_column_type(stmt, 4) == SQLITE_NULL)
-            ? -1
-            : sqlite3_column_int64(stmt, 4);
-
-        /* ACCOUNT_FK -- column 5 */
-        n->account_pk = (sqlite3_column_type(stmt, 5) == SQLITE_NULL)
+        /* FOLDER_ID -- column 5 */
+        n->folder_pk = (sqlite3_column_type(stmt, 5) == SQLITE_NULL)
             ? -1
             : sqlite3_column_int64(stmt, 5);
 
-        n->protobuf_data = _blobdup_col(stmt, 6, &n->protobuf_len);
-        n->is_pinned = sqlite3_column_int(stmt, 7);
+        /* ACCOUNT_FK -- column 6 */
+        n->account_pk = (sqlite3_column_type(stmt, 6) == SQLITE_NULL)
+            ? -1
+            : sqlite3_column_int64(stmt, 6);
+
+        n->protobuf_data = _blobdup_col(stmt, 7, &n->protobuf_len);
+        n->is_pinned = sqlite3_column_int(stmt, 8);
         n->is_password_protected = has_password
-            ? sqlite3_column_int(stmt, 8)
+            ? sqlite3_column_int(stmt, 9)
             : 0;
 
         (*count)++;
@@ -2432,6 +2467,7 @@ void ane_free_notes(ane_note *notes, size_t count)
 {
     if (!notes) return;
     for (size_t i = 0; i < count; i++) {
+        free(notes[i].identifier);
         free(notes[i].title);
         free(notes[i].folder_title);
         free(notes[i].account_name);

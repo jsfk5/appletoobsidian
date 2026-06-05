@@ -75,8 +75,103 @@ class HTMLAttachmentProcessor {
             embedImages: embedImages,
             linkEmbeddedImages: linkEmbeddedImages
         )
+        processedHTML = repairLooseImageSources(
+            in: processedHTML,
+            attachments: attachments,
+            attachmentPaths: attachmentPaths
+        )
 
         return processedHTML
+    }
+
+    private func repairLooseImageSources(
+        in html: String,
+        attachments: [NotesAttachment],
+        attachmentPaths: [String: String]
+    ) -> String {
+        let imagePaths = attachments.compactMap { attachment -> String? in
+            guard isImageAttachment(attachment) else { return nil }
+            return attachmentPaths[attachment.id]
+        }
+        guard !imagePaths.isEmpty,
+              let regex = try? NSRegularExpression(
+                pattern: #"<img\b([^>]*?)src=(['"])([^'"]+)\2([^>]*)>"#,
+                options: [.caseInsensitive]
+              ) else {
+            return html
+        }
+
+        let nsString = html as NSString
+        let matches = regex.matches(in: html, options: [], range: NSRange(location: 0, length: nsString.length))
+        var replacements: [(range: NSRange, html: String)] = []
+        var nextImagePathIndex = 0
+
+        for match in matches {
+            guard match.numberOfRanges >= 5,
+                  nextImagePathIndex < imagePaths.count else {
+                continue
+            }
+
+            let src = nsString.substring(with: match.range(at: 3))
+            guard shouldRepairImageSource(src) else {
+                continue
+            }
+
+            let beforeSource = nsString.substring(with: match.range(at: 1))
+            let quote = nsString.substring(with: match.range(at: 2))
+            let afterSource = nsString.substring(with: match.range(at: 4))
+            let repairedPath = imagePaths[nextImagePathIndex].htmlEscaped
+            let replacement = "<img\(beforeSource)src=\(quote)\(repairedPath)\(quote)\(afterSource)>"
+            replacements.append((range: match.range(at: 0), html: replacement))
+            nextImagePathIndex += 1
+        }
+
+        guard !replacements.isEmpty else {
+            return html
+        }
+
+        var result = html
+        for replacement in replacements.reversed() {
+            result = (result as NSString).replacingCharacters(in: replacement.range, with: replacement.html)
+        }
+        return result
+    }
+
+    private func shouldRepairImageSource(_ source: String) -> Bool {
+        let trimmed = source.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return true }
+
+        let lowercased = trimmed.lowercased()
+        if lowercased.hasPrefix("data:") ||
+           lowercased.hasPrefix("http://") ||
+           lowercased.hasPrefix("https://") ||
+           lowercased.hasPrefix("file://") ||
+           lowercased.hasPrefix("cid:") ||
+           lowercased.hasPrefix("/") ||
+           lowercased.hasPrefix("#") {
+            return false
+        }
+
+        let knownImageExtensions = ["jpg", "jpeg", "png", "gif", "heic", "tif", "tiff", "webp", "bmp"]
+        if knownImageExtensions.contains(URL(fileURLWithPath: trimmed).pathExtension.lowercased()) {
+            return false
+        }
+
+        return true
+    }
+
+    private func isImageAttachment(_ attachment: NotesAttachment) -> Bool {
+        attachment.typeUTI.hasPrefix("public.image") ||
+        attachment.typeUTI.hasPrefix("public.jpeg") ||
+        attachment.typeUTI.hasPrefix("public.png") ||
+        attachment.typeUTI.hasPrefix("public.heic") ||
+        attachment.typeUTI.hasPrefix("public.tiff") ||
+        attachment.typeUTI.hasPrefix("com.compuserve.gif") ||
+        attachment.typeUTI == "com.compuserve.gif" ||
+        attachment.typeUTI == "com.apple.paper" ||
+        attachment.typeUTI == "com.apple.drawing" ||
+        attachment.typeUTI == "com.apple.drawing.2" ||
+        attachment.typeUTI == "com.apple.notes.gallery"
     }
 
     /// Replace <object> tags with actual attachment content

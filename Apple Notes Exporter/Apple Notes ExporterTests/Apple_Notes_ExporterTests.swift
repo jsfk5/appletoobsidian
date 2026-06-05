@@ -19,6 +19,7 @@
 //
 
 import XCTest
+import SQLite3
 @testable import Apple_Notes_Exporter
 
 final class Apple_Notes_ExporterTests: XCTestCase {
@@ -44,6 +45,74 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         self.measure {
             // Put the code you want to measure the time of here.
         }
+    }
+
+    func testSanitizedFileNamePreservesVisualSlash() throws {
+        let note = NotesNote(
+            id: "note-1",
+            identifier: nil,
+            sourceFingerprint: nil,
+            title: "[Day 2/7] Your Glasses, A 100 Billion Dollar Lie",
+            plaintext: "",
+            htmlBody: nil,
+            creationDate: Date(),
+            modificationDate: Date(),
+            folderId: "folder-1",
+            accountId: "account-1",
+            attachments: [],
+            isPasswordProtected: false
+        )
+
+        XCTAssertEqual(note.sanitizedFileName, "[Day 2\u{2215}7] Your Glasses, A 100 Billion Dollar Lie")
+    }
+
+    func testLooseImageSourceUsesExportedAttachmentPath() throws {
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(":memory:", &db), SQLITE_OK)
+        defer { sqlite3_close(db) }
+
+        let processor = HTMLAttachmentProcessor(database: db!)
+        let attachment = NotesAttachment(
+            id: "image-1",
+            typeUTI: "public.jpeg",
+            filename: "9430A7CC-CB05-4DFC-8A58-DAB90C8F24B0.jpg"
+        )
+        let html = #"<html><body><img src="Preventing The" alt="Preventing The"></body></html>"#
+
+        let processed = processor.processHTML(
+            html: html,
+            attachments: [attachment],
+            attachmentPaths: [
+                "image-1": "Preventing The 'Bad' Plateau - The Frauenfeld Clinic (Attachments)/9430A7CC-CB05-4DFC-8A58-DAB90C8F24B0.jpg"
+            ],
+            embedImages: false,
+            linkEmbeddedImages: false
+        )
+
+        XCTAssertTrue(processed.contains(#"src="Preventing The &#39;Bad&#39; Plateau - The Frauenfeld Clinic (Attachments)/9430A7CC-CB05-4DFC-8A58-DAB90C8F24B0.jpg""#))
+    }
+
+    func testBareObsidianImageEmbedUsesExportedAttachmentPath() throws {
+        let attachment = NotesAttachment(
+            id: "image-1",
+            typeUTI: "public.jpeg",
+            filename: "9430A7CC-CB05-4DFC-8A58-DAB90C8F24B0.jpg"
+        )
+        let markdown = """
+        **Preventing The 'Bad' Plateau
+        **![[Preventing The ]]
+        """
+
+        let repaired = MarkdownAttachmentRepair.repairBareObsidianImageEmbeds(
+            in: markdown,
+            attachments: [attachment],
+            attachmentPaths: [
+                "image-1": "Preventing The 'Bad' Plateau - The Frauenfeld Clinic (Attachments)/9430A7CC-CB05-4DFC-8A58-DAB90C8F24B0.jpg"
+            ]
+        )
+
+        XCTAssertTrue(repaired.contains("![[Preventing The 'Bad' Plateau - The Frauenfeld Clinic (Attachments)/9430A7CC-CB05-4DFC-8A58-DAB90C8F24B0.jpg]]"))
+        XCTAssertFalse(repaired.contains("![[Preventing The ]]"))
     }
 
 }
