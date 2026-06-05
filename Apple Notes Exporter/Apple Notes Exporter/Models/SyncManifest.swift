@@ -35,6 +35,10 @@ struct SyncManifest: Codable {
         var exportedPath: String
         /// Relative paths to exported attachment files for this note
         var attachmentPaths: [String]
+        /// Export settings that materially affect rendered output.
+        var exportFingerprint: String?
+        /// Stable note-content fingerprint used when Apple Notes timestamps are unreliable.
+        var contentFingerprint: String?
     }
 
     // MARK: - Factory
@@ -68,10 +72,20 @@ struct SyncManifest: Codable {
     // MARK: - Sync Logic
 
     /// Determine which notes need to be exported (new or modified since last sync)
-    func notesNeedingExport(from notes: [NotesNote]) -> [NotesNote] {
+    func notesNeedingExport(
+        from notes: [NotesNote],
+        exportFingerprint: String? = nil,
+        contentFingerprint: (NotesNote) -> String? = { _ in nil }
+    ) -> [NotesNote] {
         return notes.filter { note in
             guard let entry = self.notes[note.id] else {
                 // Note not in manifest — it's new
+                return true
+            }
+            if entry.exportFingerprint != exportFingerprint {
+                return true
+            }
+            if entry.contentFingerprint != contentFingerprint(note) {
                 return true
             }
             // Note exists — check if it's been modified since last export
@@ -88,11 +102,20 @@ struct SyncManifest: Codable {
     // MARK: - Mutation
 
     /// Record a successfully exported note
-    mutating func recordExport(noteId: String, modificationDate: Date, exportedPath: String, attachmentPaths: [String] = []) {
+    mutating func recordExport(
+        noteId: String,
+        modificationDate: Date,
+        exportedPath: String,
+        attachmentPaths: [String] = [],
+        exportFingerprint: String? = nil,
+        contentFingerprint: String? = nil
+    ) {
         notes[noteId] = SyncedNoteEntry(
             modificationDate: modificationDate,
             exportedPath: exportedPath,
-            attachmentPaths: attachmentPaths
+            attachmentPaths: attachmentPaths,
+            exportFingerprint: exportFingerprint,
+            contentFingerprint: contentFingerprint
         )
         lastSync = Date()
     }

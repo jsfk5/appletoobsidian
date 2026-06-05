@@ -47,9 +47,13 @@ struct LicensePermissionsView: View {
     }
     
     func hasFullDiskAccess() -> Bool {
-        let path = NSHomeDirectory() + "/Library/Group Containers/group.com.apple.notes/"
-        return FileManager.default.isReadableFile(atPath: path)
-        //return FullDiskAccess.isGranted
+        let path = NSHomeDirectory() + "/Library/Group Containers/group.com.apple.notes/NoteStore.sqlite"
+        guard FileManager.default.fileExists(atPath: path),
+              let handle = FileHandle(forReadingAtPath: path) else {
+            return false
+        }
+        handle.closeFile()
+        return true
     }
     
     func checkPermission() {

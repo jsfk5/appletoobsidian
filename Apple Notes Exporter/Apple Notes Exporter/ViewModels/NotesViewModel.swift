@@ -146,6 +146,51 @@ class NotesViewModel: ObservableObject {
         await loadNotes()
     }
 
+    /// Reload notes while preserving the current note selection by note ID.
+    func reloadPreservingSelection() async {
+        let selectedNoteIDs = selectionState.noteIDs
+        loadingState = .loading(message: "Refreshing notes from database...")
+
+        do {
+            async let accountsTask = repository.fetchAccounts()
+            async let foldersTask = repository.fetchFolders()
+            async let notesTask = repository.fetchNotes()
+
+            let (accounts, folders, notes) = try await (accountsTask, foldersTask, notesTask)
+
+            rawAccounts = accounts
+            rawFolders = folders
+            rawNotes = notes
+
+            hierarchy = NotesHierarchy.build(
+                accounts: accounts,
+                folders: folders,
+                notes: notes,
+                sortBy: sortOption,
+                foldersOnTop: foldersOnTop
+            )
+
+            let availableNoteIDs = Set(notes.map(\.id))
+            let restoredNoteIDs = selectedNoteIDs.intersection(availableNoteIDs)
+            selectionState.restoreSelectedNoteIDs(restoredNoteIDs)
+            if restoredNoteIDs.isEmpty && !selectedNoteIDs.isEmpty {
+                selectAll()
+            }
+
+            loadingState = .loaded
+
+            Logger.noteQuery.info("Reloaded \(self.allNotes.count) notes while preserving selection")
+
+        } catch let error as RepositoryError {
+            loadingState = .error(error.localizedDescription)
+            Logger.noteQuery.error("Repository error: \(error.localizedDescription)")
+
+        } catch {
+            loadingState = .error("Failed to load notes: \(error.localizedDescription)")
+            Logger.noteQuery.error("Unexpected error: \(error.localizedDescription)")
+        }
+    }
+
     // MARK: - Selection Management
 
     /// Toggle a single note's selection

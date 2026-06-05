@@ -20,6 +20,7 @@
 
 import Foundation
 import OSLog
+import CryptoKit
 import SQLite3
 
 // MARK: - Repository Protocol
@@ -52,6 +53,7 @@ protocol NotesRepository {
 
 enum RepositoryError: Error, LocalizedError {
     case databaseUnavailable
+    case databaseUnavailableDetailed(String)
     case itemNotFound(String)
     case attachmentNotFound(String)
     case decodingError(String)
@@ -60,6 +62,8 @@ enum RepositoryError: Error, LocalizedError {
         switch self {
         case .databaseUnavailable:
             return "Unable to access the Notes database. Please ensure Full Disk Access is granted."
+        case .databaseUnavailableDetailed(let details):
+            return details
         case .itemNotFound(let id):
             return "Item with ID '\(id)' was not found in the database."
         case .attachmentNotFound(let id):
@@ -84,8 +88,17 @@ class DatabaseNotesRepository: NotesRepository, @unchecked Sendable {
     // MARK: - Internal C Handle Helpers
 
     /// Open a C parser handle. Caller must call ane_close() when done.
-    private func openDB() -> OpaquePointer? {
-        return ane_open(databasePath)
+    private func openDB() throws -> OpaquePointer {
+        if let db = ane_open(databasePath) {
+            return db
+        }
+
+        if let messagePointer = ane_last_error_message() {
+            let message = String(cString: messagePointer)
+            throw RepositoryError.databaseUnavailableDetailed(message)
+        }
+
+        throw RepositoryError.databaseUnavailable
     }
 
     // MARK: - Fetch Methods
@@ -93,8 +106,11 @@ class DatabaseNotesRepository: NotesRepository, @unchecked Sendable {
     func fetchAccounts() async throws -> [NotesAccount] {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                guard let db = self.openDB() else {
-                    continuation.resume(throwing: RepositoryError.databaseUnavailable)
+                let db: OpaquePointer
+                do {
+                    db = try self.openDB()
+                } catch {
+                    continuation.resume(throwing: error)
                     return
                 }
                 defer { ane_close(db) }
@@ -141,8 +157,11 @@ class DatabaseNotesRepository: NotesRepository, @unchecked Sendable {
     func fetchFolders() async throws -> [NotesFolder] {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                guard let db = self.openDB() else {
-                    continuation.resume(throwing: RepositoryError.databaseUnavailable)
+                let db: OpaquePointer
+                do {
+                    db = try self.openDB()
+                } catch {
+                    continuation.resume(throwing: error)
                     return
                 }
                 defer { ane_close(db) }
@@ -177,8 +196,11 @@ class DatabaseNotesRepository: NotesRepository, @unchecked Sendable {
     func fetchNotes() async throws -> [NotesNote] {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                guard let db = self.openDB() else {
-                    continuation.resume(throwing: RepositoryError.databaseUnavailable)
+                let db: OpaquePointer
+                do {
+                    db = try self.openDB()
+                } catch {
+                    continuation.resume(throwing: error)
                     return
                 }
                 defer { ane_close(db) }
@@ -198,7 +220,9 @@ class DatabaseNotesRepository: NotesRepository, @unchecked Sendable {
 
                 for i in 0..<count {
                     let n = raw[i]
-                    let title = n.title != nil ? String(cString: n.title) : "Untitled"
+                    let rawIdentifier = n.identifier.map { String(cString: $0) }
+                    let rawTitle = n.title.map { String(cString: $0) }
+                    var sourceFingerprint: String?
 
                     // Convert CoreTime dates to Swift Date
                     // CoreTime is seconds since 2001-01-01, Date(timeIntervalSinceReferenceDate:) uses the same epoch
@@ -211,6 +235,8 @@ class DatabaseNotesRepository: NotesRepository, @unchecked Sendable {
 
                     if n.protobuf_data != nil && n.protobuf_len > 0 {
                         let data = Data(bytes: n.protobuf_data, count: n.protobuf_len)
+                        let digest = SHA256.hash(data: data)
+                        sourceFingerprint = digest.map { String(format: "%02x", $0) }.joined()
 
                         // Legacy notes have raw text, not gzipped protobuf
                         if n.is_legacy != 0 {
@@ -235,8 +261,16 @@ class DatabaseNotesRepository: NotesRepository, @unchecked Sendable {
                         }
                     }
 
+                    let title = NotesNote.resolvedTitle(
+                        explicitTitle: rawTitle,
+                        plaintext: plaintext,
+                        noteId: "\(n.pk)"
+                    )
+
                     notes.append(NotesNote(
                         id: "\(n.pk)",
+                        identifier: rawIdentifier,
+                        sourceFingerprint: sourceFingerprint,
                         title: title,
                         plaintext: plaintext,
                         htmlBody: nil,  // Generated on-demand during export
@@ -244,7 +278,8 @@ class DatabaseNotesRepository: NotesRepository, @unchecked Sendable {
                         modificationDate: modificationDate,
                         folderId: "\(n.folder_pk)",
                         accountId: "\(n.account_pk)",
-                        attachments: attachments
+                        attachments: attachments,
+                        isPasswordProtected: n.is_password_protected != 0
                     ))
                 }
 
@@ -256,8 +291,11 @@ class DatabaseNotesRepository: NotesRepository, @unchecked Sendable {
     func fetchAttachment(id: String) async throws -> Data {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                guard let db = self.openDB() else {
-                    continuation.resume(throwing: RepositoryError.databaseUnavailable)
+                let db: OpaquePointer
+                do {
+                    db = try self.openDB()
+                } catch {
+                    continuation.resume(throwing: error)
                     return
                 }
                 defer { ane_close(db) }
@@ -282,7 +320,10 @@ class DatabaseNotesRepository: NotesRepository, @unchecked Sendable {
     func fetchAttachmentFilename(id: String) async -> String? {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                guard let db = self.openDB() else {
+                let db: OpaquePointer
+                do {
+                    db = try self.openDB()
+                } catch {
                     continuation.resume(returning: nil)
                     return
                 }
@@ -291,6 +332,10 @@ class DatabaseNotesRepository: NotesRepository, @unchecked Sendable {
                 // Try the prefetch cache first for O(1) lookup
                 let cached = ane_lookup_attachment(db, id)
                 if let meta = cached {
+                    if let userTitle = meta.pointee.user_title {
+                        continuation.resume(returning: String(cString: userTitle))
+                        return
+                    }
                     // Prefer media_filename, fall back to attachment filename
                     if let mediaFn = meta.pointee.media_filename {
                         continuation.resume(returning: String(cString: mediaFn))
@@ -332,8 +377,11 @@ class DatabaseNotesRepository: NotesRepository, @unchecked Sendable {
     func generateHTML(forNoteId noteId: String) async throws -> String {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
-                guard let db = self.openDB() else {
-                    continuation.resume(throwing: RepositoryError.databaseUnavailable)
+                let db: OpaquePointer
+                do {
+                    db = try self.openDB()
+                } catch {
+                    continuation.resume(throwing: error)
                     return
                 }
                 defer { ane_close(db) }
@@ -474,6 +522,8 @@ class MockNotesRepository: NotesRepository {
 
         let note1 = NotesNote(
             id: "100",
+            identifier: "sample-note-identifier",
+            sourceFingerprint: nil,
             title: "Meeting Notes",
             plaintext: "Discussed project timeline",
             htmlBody: "<html><body>Discussed project timeline</body></html>",
@@ -481,7 +531,8 @@ class MockNotesRepository: NotesRepository {
             modificationDate: Date(),
             folderId: "10",
             accountId: "1",
-            attachments: []
+            attachments: [],
+            isPasswordProtected: false
         )
 
         repo.mockAccounts = [account]

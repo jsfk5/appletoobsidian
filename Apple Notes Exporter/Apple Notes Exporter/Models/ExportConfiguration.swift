@@ -284,6 +284,7 @@ struct ExportConfigurations: Codable {
     var includeAttachments: Bool = true
     var concatenateOutput: Bool = false
     var incrementalSync: Bool = false
+    var obsidianInternalLinksInMarkdown: Bool = false
 
     static var `default`: ExportConfigurations {
         ExportConfigurations(

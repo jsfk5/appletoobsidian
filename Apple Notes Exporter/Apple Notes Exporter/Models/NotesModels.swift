@@ -81,7 +81,11 @@ struct NotesFolder: NotesItem {
 
 /// Represents an individual note with all its content and metadata
 struct NotesNote: NotesItem {
+    static let maximumSanitizedFilenameLength = 64
+
     let id: String
+    let identifier: String?
+    let sourceFingerprint: String?
     let title: String
     let plaintext: String
     let htmlBody: String?  // Optional - generated on-demand during export
@@ -90,6 +94,7 @@ struct NotesNote: NotesItem {
     let folderId: String
     let accountId: String
     let attachments: [NotesAttachment]
+    let isPasswordProtected: Bool
 
     var name: String { title }
     var description: String { title }
@@ -100,12 +105,56 @@ struct NotesNote: NotesItem {
 
     /// Generate sanitized filename for export
     var sanitizedFileName: String {
-        let invalidCharacters = CharacterSet(charactersIn: "\\/:*?\"<>|")
+        var sanitized = title
+            .replacingOccurrences(of: "/", with: "\u{2215}")
+            .replacingOccurrences(of: "\\", with: "\u{2215}")
+        let invalidCharacters = CharacterSet(charactersIn: ":*?\"<>|")
             .union(.newlines)
             .union(.illegalCharacters)
             .union(.controlCharacters)
 
-        return title.components(separatedBy: invalidCharacters).joined(separator: "")
+        sanitized = sanitized.components(separatedBy: invalidCharacters).joined(separator: "")
+        let trimmed = NotesNote.truncatedFilenameComponent(
+            sanitized.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+
+        if !trimmed.isEmpty {
+            return trimmed
+        }
+
+        return "Note \(id)"
+    }
+
+    static func truncatedFilenameComponent(_ value: String, maximumLength: Int = NotesNote.maximumSanitizedFilenameLength) -> String {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > maximumLength else {
+            return trimmed
+        }
+
+        let limited = String(trimmed.prefix(maximumLength))
+        return limited.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+    }
+
+    static func resolvedTitle(explicitTitle: String?, plaintext: String, noteId: String) -> String {
+        if let explicitTitle {
+            let trimmedTitle = explicitTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            let normalizedTitle = trimmedTitle.lowercased()
+            let placeholderTitles: Set<String> = [
+                "untitled"
+            ]
+            if !trimmedTitle.isEmpty && !placeholderTitles.contains(normalizedTitle) {
+                return trimmedTitle
+            }
+        }
+
+        if let firstContentLine = plaintext
+            .split(whereSeparator: \.isNewline)
+            .map({ $0.trimmingCharacters(in: .whitespacesAndNewlines) })
+            .first(where: { !$0.isEmpty }) {
+            return firstContentLine
+        }
+
+        return "Note \(noteId)"
     }
 }
 
@@ -310,6 +359,10 @@ struct NotesSelectionState {
     private var selectedNoteIds: Set<String> = []
     private var selectedFolderIds: Set<String> = []
 
+    var noteIDs: Set<String> {
+        selectedNoteIds
+    }
+
     /// Check if a note is selected
     func isNoteSelected(_ noteId: String) -> Bool {
         selectedNoteIds.contains(noteId)
@@ -364,6 +417,11 @@ struct NotesSelectionState {
     /// Clear all selections
     mutating func clearAll() {
         selectedNoteIds.removeAll()
+        selectedFolderIds.removeAll()
+    }
+
+    mutating func restoreSelectedNoteIDs(_ noteIDs: Set<String>) {
+        selectedNoteIds = noteIDs
         selectedFolderIds.removeAll()
     }
 }

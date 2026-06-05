@@ -103,6 +103,7 @@ typedef struct {
 
 typedef struct {
     int64_t     pk;
+    char       *identifier;       /* ZIDENTIFIER (UUID string) */
     char       *title;
     char       *folder_title;
     char       *account_name;
@@ -140,6 +141,12 @@ typedef struct {
  * Returns NULL on failure.
  */
 ane_db *ane_open(const char *db_path);
+
+/**
+ * Returns the most recent open/initialization error message from ane_open().
+ * The returned pointer is owned by AppleNotesKit and must not be freed.
+ */
+const char *ane_last_error_message(void);
 
 /**
  * Close the database and free the handle.

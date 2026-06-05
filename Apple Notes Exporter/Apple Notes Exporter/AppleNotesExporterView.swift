@@ -84,6 +84,12 @@ struct AppleNotesExporterView: View {
 
     func triggerExportNotes() {
         // ** Validate
+        if let errorMessage = notesViewModel.loadingState.errorMessage {
+            self.activeAlert = .notesLoadFailed(errorMessage)
+            self.showAlert = true
+            return
+        }
+
         // No notes selected
         if self.sharedState.selectedNotesCount == 0 {
             self.activeAlert = .noneSelected
@@ -110,6 +116,7 @@ struct AppleNotesExporterView: View {
 
         // Do the export using the new ExportViewModel
         Task {
+            await notesViewModel.reloadPreservingSelection()
             await exportViewModel.exportNotes(
                 notesViewModel.selectedNotes,
                 toDirectory: outputURL!,
@@ -142,6 +149,7 @@ struct AppleNotesExporterView: View {
     private enum ActiveAlert {
         case noneSelected
         case noOutput
+        case notesLoadFailed(String)
     }
     
     init(sharedState: AppleNotesExporterState) {
@@ -194,6 +202,14 @@ struct AppleNotesExporterView: View {
     var body: some View {
         VStack {
         VStack(alignment: .leading) {
+            HStack {
+                Text("Build \(BUILD_MARKER)")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundColor(.secondary)
+                Spacer()
+            }
+            .padding(.bottom, 4)
+
             Text("Step 1: Select Notes")
                 .font(.title)
                 .multilineTextAlignment(.leading).lineLimit(1)
@@ -220,6 +236,17 @@ struct AppleNotesExporterView: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
+            if let errorMessage = notesViewModel.loadingState.errorMessage {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                    Text("Unable to load Apple Notes: \(errorMessage)")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.top, 2)
+            }
             
             Text("Step 2: Choose Export Format")
                 .font(.title)
@@ -302,7 +329,15 @@ struct AppleNotesExporterView: View {
             HStack() {
                 Image(systemName: "folder")
                 Text(
-                    outputPath != "" ? (outputPath + (exportViewModel.configurations.concatenateOutput ? "/Exported Notes.\(outputFormat.lowercased())" : "")) : "Choose an output folder"
+                    outputPath != ""
+                    ? (
+                        outputPath + (
+                            exportViewModel.configurations.concatenateOutput
+                            ? "/Exported Notes.\((ExportFormat(rawValue: outputFormat)?.fileExtension) ?? outputFormat.lowercased())"
+                            : ""
+                        )
+                    )
+                    : "Choose an output folder"
                 ).frame(maxWidth: .infinity, alignment: .leading)
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -343,6 +378,15 @@ struct AppleNotesExporterView: View {
                         .disabled(exportViewModel.configurations.concatenateOutput)
                     Spacer()
                 }
+                if outputFormat == "MD" {
+                    HStack {
+                        Toggle(
+                            "Format internal Apple note links as Obsidian wikilinks",
+                            isOn: $exportViewModel.configurations.obsidianInternalLinksInMarkdown
+                        )
+                        Spacer()
+                    }
+                }
             }
             .onChange(of: exportViewModel.configurations.addDateToFilename) { _ in exportViewModel.saveConfigurations() }
             .onChange(of: exportViewModel.configurations.filenameDateFormat) { _ in exportViewModel.saveConfigurations() }
@@ -352,6 +396,7 @@ struct AppleNotesExporterView: View {
                 exportViewModel.saveConfigurations()
                 showSyncWarning = exportViewModel.configurations.incrementalSync
             }
+            .onChange(of: exportViewModel.configurations.obsidianInternalLinksInMarkdown) { _ in exportViewModel.saveConfigurations() }
 
             // Sync overwrite warning
             VStack {
@@ -409,7 +454,7 @@ struct AppleNotesExporterView: View {
                 .pointerOnHover()
         }
         }
-        .frame(width: 500.0, height: showSyncWarning ? 455.0 : 410.0, alignment: .top)
+        .frame(minWidth: 500.0, idealWidth: 540.0, minHeight: showSyncWarning ? 505.0 : 460.0, alignment: .top)
         .padding(10.0)
         .onAppear {
             // Initialize sync warning state from persisted config
@@ -471,6 +516,12 @@ struct AppleNotesExporterView: View {
                 Alert(
                     title: Text("No Output Folder Chosen"),
                     message: Text("Please choose folder where you would like the exported notes to be saved."),
+                    dismissButton: .default(Text("OK"))
+                )
+            case .notesLoadFailed(let message):
+                Alert(
+                    title: Text("Unable to Load Apple Notes"),
+                    message: Text(message),
                     dismissButton: .default(Text("OK"))
                 )
             }
