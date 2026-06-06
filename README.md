@@ -52,6 +52,20 @@ Incremental sync treats Apple Notes as the source of truth. On each sync, the ex
 
 Cleanup is scoped to the configured output folder. The app should not touch files outside the selected export root.
 
+## Data safety
+
+Apple to Obsidian is provided without warranty. Sync mode treats Apple Notes as the source of truth and may remove previously exported Markdown files and attachment/resource folders inside the selected export folder.
+
+Before using sync mode on important notes:
+
+- Back up your Obsidian vault.
+- Run the first export into a temporary test folder.
+- Review the exported folder before pointing the app at your real vault.
+- Keep the export root dedicated to Apple Notes output, not mixed with unrelated hand-written notes.
+- Do not share private exported notes, logs, screenshots, or databases in public issues.
+
+The project is designed so cleanup stays inside the selected output root. If you report a cleanup bug, describe the folder structure and logs without attaching private note contents.
+
 ## Requirements
 
 - macOS Big Sur 11.0 or later
@@ -121,7 +135,12 @@ This repository is being published as an active GPL-3.0 fork with a concrete mai
 - Apple Notes is not a public export API. This project reads local Notes database files, so macOS and Apple Notes schema changes can break behavior.
 - The app needs Full Disk Access.
 - Email-backed Notes accounts may not live in the same local database shape as iCloud and On My Mac notes.
+- Sync mode can remove previously exported files inside the selected output folder when the corresponding Apple Notes are deleted, moved out of scope, or no longer part of the active export set.
 - This is not affiliated with Apple, Obsidian, or OpenAI.
+
+## Privacy and security
+
+See [PRIVACY.md](PRIVACY.md) for local-data handling notes and [SECURITY.md](SECURITY.md) for safe vulnerability reporting.
 
 ## License
 
