@@ -39,6 +39,8 @@ Compared with the upstream Apple Notes Exporter base, this fork adds and/or tune
 - More visible permission guidance when macOS Full Disk Access blocks the Notes database.
 - Regression coverage for Obsidian link conversion, path normalization, sync cleanup, and move-sensitive fingerprints.
 
+See [Apple Notes Feature Coverage](docs/apple-notes-feature-coverage.md) for the public compatibility matrix, sync concerns, and test priorities.
+
 ## Sync behavior
 
 Incremental sync treats Apple Notes as the source of truth. On each sync, the exporter:
