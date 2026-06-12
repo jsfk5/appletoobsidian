@@ -1,0 +1,92 @@
+name: Sync bug
+description: Report a problem with incremental sync, moved notes, deleted notes, Recently Deleted, or cleanup behavior.
+title: "[Sync]: "
+labels:
+  - sync
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach private Apple Notes databases, exported notes, vault folders, unredacted logs, or screenshots containing private note content.
+
+        If possible, reproduce the issue with synthetic notes in a temporary output folder.
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+      description: "Example: macOS 15.5 or macOS 26 beta."
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: App version, build, or commit
+      description: Paste the app build number or Git commit hash if known.
+    validations:
+      required: false
+  - type: dropdown
+    id: full-disk-access
+    attributes:
+      label: Full Disk Access
+      description: Does the exact app bundle you ran have Full Disk Access?
+      options:
+        - "Yes"
+        - "No"
+        - "Not sure"
+    validations:
+      required: true
+  - type: dropdown
+    id: sync-action
+    attributes:
+      label: Source note action
+      description: What changed in Apple Notes before the sync?
+      options:
+        - Created note
+        - Edited note
+        - Moved note
+        - Renamed note
+        - Deleted note
+        - Moved note to Recently Deleted
+        - Restored note from Recently Deleted
+        - Changed attachment
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected result
+      description: Describe the expected exported path or cleanup behavior. Redact private names if needed.
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual result
+      description: Describe what happened instead. Redact private names if needed.
+    validations:
+      required: true
+  - type: textarea
+    id: folder-shape
+    attributes:
+      label: Redacted folder shape
+      description: Show only the relevant output folder structure with private names replaced by placeholders.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs
+      description: Paste only relevant redacted log lines. Do not include private note contents.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Synthetic reproduction steps
+      description: Steps using non-private test notes, if available.
+    validations:
+      required: false
