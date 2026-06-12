@@ -1,0 +1,59 @@
+name: Feature request
+description: Request Apple Notes feature coverage, Obsidian output improvements, or sync behavior improvements.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check `docs/apple-notes-feature-coverage.md` before filing. Do not include private note contents or personal vault data.
+  - type: dropdown
+    id: feature-area
+    attributes:
+      label: Feature area
+      options:
+        - Text formatting
+        - Lists or checklists
+        - Tables
+        - Links
+        - Images or attachments
+        - PDFs, scans, drawings, or markup
+        - Audio or transcripts
+        - Tags or Smart Folders
+        - Folders, moves, deletes, or Recently Deleted
+        - Locked notes
+        - Shared notes
+        - Math Notes
+        - Automation or CLI
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: desired-output
+    attributes:
+      label: Desired Obsidian output
+      description: Describe what the exported Markdown or files should look like.
+    validations:
+      required: true
+  - type: textarea
+    id: apple-notes-behavior
+    attributes:
+      label: Apple Notes behavior
+      description: Describe the Apple Notes feature without including private note content.
+    validations:
+      required: true
+  - type: textarea
+    id: sync-impact
+    attributes:
+      label: Sync impact
+      description: Should this affect incremental sync, moved notes, cleanup, or attachments?
+    validations:
+      required: false
+  - type: textarea
+    id: examples
+    attributes:
+      label: Non-private examples or references
+      description: Link to public references or describe synthetic examples.
+    validations:
+      required: false

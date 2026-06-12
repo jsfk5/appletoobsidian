@@ -1,0 +1,81 @@
+name: Attachment or link bug
+description: Report broken images, files, PDFs, Apple Notes links, Obsidian wikilinks, or Markdown attachment output.
+title: "[Attachment/Link]: "
+labels:
+  - attachments
+  - links
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach private notes, exported vault files, Apple Notes databases, or screenshots containing private note content.
+
+        Prefer a synthetic note that reproduces the broken attachment or link.
+  - type: input
+    id: macos-version
+    attributes:
+      label: macOS version
+    validations:
+      required: true
+  - type: input
+    id: app-version
+    attributes:
+      label: App version, build, or commit
+    validations:
+      required: false
+  - type: dropdown
+    id: problem-area
+    attributes:
+      label: Problem area
+      options:
+        - Inline image
+        - Generic file attachment
+        - PDF
+        - Scan
+        - Drawing
+        - Web link
+        - Apple Notes note link
+        - Obsidian wikilink
+        - Table content
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: expected-markdown
+    attributes:
+      label: Expected Markdown
+      description: Show the expected Markdown shape using redacted names/placeholders.
+      render: markdown
+    validations:
+      required: false
+  - type: textarea
+    id: actual-markdown
+    attributes:
+      label: Actual Markdown
+      description: Paste the broken Markdown snippet with private content redacted.
+      render: markdown
+    validations:
+      required: true
+  - type: textarea
+    id: exported-files
+    attributes:
+      label: Exported files
+      description: List relevant exported attachment files using redacted filenames if needed.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Synthetic reproduction steps
+      description: Describe a non-private test note that reproduces the issue.
+    validations:
+      required: false
+  - type: textarea
+    id: notes
+    attributes:
+      label: Additional context
+      description: Include any relevant redacted logs or details.
+    validations:
+      required: false
