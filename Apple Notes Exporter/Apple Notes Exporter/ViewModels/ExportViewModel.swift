@@ -129,6 +129,28 @@ private struct StaleExportArtifacts: Sendable {
     let attachmentURLs: [URL]
 }
 
+enum NoteContentFingerprint {
+    static func value(for note: NotesNote) -> String {
+        let attachmentSignature = note.attachments
+            .map { "\($0.id)|\($0.typeUTI)|\($0.filename ?? "")" }
+            .sorted()
+            .joined(separator: "\n")
+        let payload = [
+            note.id,
+            note.identifier ?? "",
+            note.sourceFingerprint ?? "",
+            note.accountId,
+            note.folderId,
+            note.title,
+            note.plaintext,
+            attachmentSignature,
+            note.isPasswordProtected ? "locked" : "unlocked"
+        ].joined(separator: "\u{1F}")
+        let digest = SHA256.hash(data: Data(payload.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+}
+
 // MARK: - Export State
 
 enum ExportState: Equatable {
@@ -1907,23 +1929,7 @@ class ExportViewModel: ObservableObject {
     }
 
     private func noteContentFingerprint(_ note: NotesNote) -> String {
-        let attachmentSignature = note.attachments
-            .map { "\($0.id)|\($0.typeUTI)|\($0.filename ?? "")" }
-            .sorted()
-            .joined(separator: "\n")
-        let payload = [
-            note.id,
-            note.identifier ?? "",
-            note.sourceFingerprint ?? "",
-            note.accountId,
-            note.folderId,
-            note.title,
-            note.plaintext,
-            attachmentSignature,
-            note.isPasswordProtected ? "locked" : "unlocked"
-        ].joined(separator: "\u{1F}")
-        let digest = SHA256.hash(data: Data(payload.utf8))
-        return digest.map { String(format: "%02x", $0) }.joined()
+        NoteContentFingerprint.value(for: note)
     }
 
     private func markdownContent(for content: String, note: NotesNote) -> String {

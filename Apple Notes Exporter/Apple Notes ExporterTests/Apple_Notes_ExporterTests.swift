@@ -48,22 +48,59 @@ final class Apple_Notes_ExporterTests: XCTestCase {
     }
 
     func testSanitizedFileNamePreservesVisualSlash() throws {
-        let note = NotesNote(
-            id: "note-1",
-            identifier: nil,
-            sourceFingerprint: nil,
-            title: "[Day 2/7] Your Glasses, A 100 Billion Dollar Lie",
-            plaintext: "",
-            htmlBody: nil,
-            creationDate: Date(),
-            modificationDate: Date(),
-            folderId: "folder-1",
-            accountId: "account-1",
-            attachments: [],
-            isPasswordProtected: false
+        let note = makeNote(
+            title: "[Day 2/7] Your Glasses, A 100 Billion Dollar Lie"
         )
 
         XCTAssertEqual(note.sanitizedFileName, "[Day 2\u{2215}7] Your Glasses, A 100 Billion Dollar Lie")
+    }
+
+    func testNoteContentFingerprintChangesWhenNoteMoves() throws {
+        let original = makeNote(
+            id: "note-1",
+            title: "GitHub Reset",
+            plaintext: "Same body",
+            folderId: "endmyopia",
+            accountId: "icloud"
+        )
+        let movedFolder = makeNote(
+            id: "note-1",
+            title: "GitHub Reset",
+            plaintext: "Same body",
+            folderId: "tech",
+            accountId: "icloud"
+        )
+        let movedAccount = makeNote(
+            id: "note-1",
+            title: "GitHub Reset",
+            plaintext: "Same body",
+            folderId: "endmyopia",
+            accountId: "on-my-mac"
+        )
+
+        XCTAssertNotEqual(
+            NoteContentFingerprint.value(for: original),
+            NoteContentFingerprint.value(for: movedFolder)
+        )
+        XCTAssertNotEqual(
+            NoteContentFingerprint.value(for: original),
+            NoteContentFingerprint.value(for: movedAccount)
+        )
+
+        var manifest = SyncManifest.empty()
+        manifest.recordExport(
+            noteId: original.id,
+            modificationDate: original.modificationDate,
+            exportedPath: "iCloud/Endmyopia/GitHub Reset.md",
+            contentFingerprint: NoteContentFingerprint.value(for: original)
+        )
+
+        let notesNeedingExport = manifest.notesNeedingExport(
+            from: [movedFolder],
+            contentFingerprint: { NoteContentFingerprint.value(for: $0) }
+        )
+
+        XCTAssertEqual(notesNeedingExport.map(\.id), ["note-1"])
     }
 
     func testLooseImageSourceUsesExportedAttachmentPath() throws {
@@ -113,6 +150,36 @@ final class Apple_Notes_ExporterTests: XCTestCase {
 
         XCTAssertTrue(repaired.contains("![[Preventing The 'Bad' Plateau - The Frauenfeld Clinic (Attachments)/9430A7CC-CB05-4DFC-8A58-DAB90C8F24B0.jpg]]"))
         XCTAssertFalse(repaired.contains("![[Preventing The ]]"))
+    }
+
+    private func makeNote(
+        id: String = "note-1",
+        identifier: String? = nil,
+        sourceFingerprint: String? = nil,
+        title: String = "Test Note",
+        plaintext: String = "",
+        htmlBody: String? = nil,
+        creationDate: Date = Date(timeIntervalSince1970: 1_700_000_000),
+        modificationDate: Date = Date(timeIntervalSince1970: 1_700_000_100),
+        folderId: String = "folder-1",
+        accountId: String = "account-1",
+        attachments: [NotesAttachment] = [],
+        isPasswordProtected: Bool = false
+    ) -> NotesNote {
+        NotesNote(
+            id: id,
+            identifier: identifier,
+            sourceFingerprint: sourceFingerprint,
+            title: title,
+            plaintext: plaintext,
+            htmlBody: htmlBody,
+            creationDate: creationDate,
+            modificationDate: modificationDate,
+            folderId: folderId,
+            accountId: accountId,
+            attachments: attachments,
+            isPasswordProtected: isPasswordProtected
+        )
     }
 
 }

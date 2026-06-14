@@ -46,7 +46,7 @@ The source feature inventory comes from Apple's Notes User Guide for Mac. Apple 
 | Pins | Optional metadata, not physical folder placement | Unknown | Pin/unpin should not force destructive path changes | Not covered | Decide whether to export as frontmatter |
 | Tags | Obsidian tags or frontmatter metadata | Unknown | Tag edits should trigger export if supported | Not covered | Research tag storage and metadata format |
 | Smart Folders | Documented as virtual folders; avoid duplicate physical exports | Unknown | Smart Folder changes should not duplicate notes | Not covered | Treat source folder as canonical path |
-| Locked notes | Skip with clear warning or export only when safely readable | Unknown | Lock/unlock state should be explicit | Not covered | Audit locked note visibility |
+| Locked/password-protected notes | Export title and placeholder only, log locked note titles, and avoid treating blank body as normal content | Partial | Lock/unlock state should affect fingerprint without blocking sync | Not covered | Add locked-note logging/reporting and placeholder tests |
 | Shared notes and folders | Export readable content; optional sharing metadata | Unknown | Shared note moves/permission changes may affect availability | Not covered | Audit shared notes in local DB |
 | Mentions/collaboration activity | Preserve visible text; activity metadata likely unsupported | Unknown | Collaboration metadata changes low priority | Not covered | Document unsupported metadata if absent |
 | Imported notes | Export same as normal notes once in Apple Notes database | Unknown | Imported folder/name changes should sync normally | Not covered | Test imported sample note |
@@ -62,6 +62,7 @@ The source feature inventory comes from Apple's Notes User Guide for Mac. Apple 
 7. Prove image attachments export and embed inline in Obsidian Markdown.
 8. Prove PDF and generic file attachments are linked without breaking the note body.
 9. Prove title normalization preserves display meaning while keeping filesystem-safe paths.
+10. Prove locked/password-protected notes export a clear placeholder and are listed in logs or export summary by title.
 
 ## Current Priorities
 
