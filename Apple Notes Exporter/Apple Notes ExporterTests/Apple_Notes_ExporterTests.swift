@@ -103,6 +103,28 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertEqual(notesNeedingExport.map(\.id), ["note-1"])
     }
 
+    func testPasswordProtectedNoteReportIncludesTitlesOnly() throws {
+        let locked = makeNote(
+            id: "locked-1",
+            title: "Locked Planning Note",
+            plaintext: "Private locked body",
+            isPasswordProtected: true
+        )
+        let unlocked = makeNote(
+            id: "unlocked-1",
+            title: "Regular Note",
+            plaintext: "Regular body"
+        )
+
+        let report = PasswordProtectedNoteReport.make(for: [unlocked, locked])
+
+        XCTAssertEqual(report.titles, ["Locked Planning Note"])
+        XCTAssertEqual(report.count, 1)
+        XCTAssertTrue(report.hasNotes)
+        XCTAssertFalse(report.summary.contains("Private locked body"))
+        XCTAssertFalse(report.summary.contains("Regular body"))
+    }
+
     func testLooseImageSourceUsesExportedAttachmentPath() throws {
         var db: OpaquePointer?
         XCTAssertEqual(sqlite3_open(":memory:", &db), SQLITE_OK)
