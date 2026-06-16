@@ -50,6 +50,16 @@ struct ExportView: View {
                         }
 
                         // Show statistics
+                        if !stats.passwordProtectedNoteTitles.isEmpty {
+                            HStack {
+                                Image(systemName: "lock.fill")
+                                    .foregroundColor(.secondary)
+                                Text("\(stats.passwordProtectedNoteTitles.count) locked/password-protected note\(stats.passwordProtectedNoteTitles.count == 1 ? "" : "s") found with placeholder body")
+                                    .font(.headline)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+
                         if stats.failedAttachments > 0 {
                             HStack {
                                 Image(systemName: "exclamationmark.circle.fill")
@@ -128,4 +138,3 @@ struct ExportView: View {
         .padding(15)
     }
 }
-

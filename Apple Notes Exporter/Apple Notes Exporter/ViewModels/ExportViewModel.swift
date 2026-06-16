@@ -113,6 +113,7 @@ struct ExportStatistics: Equatable {
     var successfulNotes: Int = 0
     var failedNotes: Int = 0
     var failedAttachments: Int = 0
+    var passwordProtectedNoteTitles: [String] = []
     var completionDate: Date = Date()
 }
 
@@ -127,6 +128,30 @@ private struct ExportPlanEntry: Sendable {
 private struct StaleExportArtifacts: Sendable {
     let fileURL: URL
     let attachmentURLs: [URL]
+}
+
+struct PasswordProtectedNoteReport: Equatable {
+    let titles: [String]
+
+    var count: Int {
+        titles.count
+    }
+
+    var hasNotes: Bool {
+        !titles.isEmpty
+    }
+
+    var summary: String {
+        "\(count) locked/password-protected note\(count == 1 ? "" : "s") found. Body content is unavailable until unlocked in Apple Notes."
+    }
+
+    static func make(for notes: [NotesNote]) -> PasswordProtectedNoteReport {
+        let titles = notes
+            .filter(\.isPasswordProtected)
+            .map(\.title)
+            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        return PasswordProtectedNoteReport(titles: titles)
+    }
 }
 
 enum NoteContentFingerprint {
@@ -246,10 +271,12 @@ class ExportViewModel: ObservableObject {
         do {
             let exportableNotes = try await notesExcludingRecentlyDeleted(notes)
             let currentExportNoteIDs = Set(exportableNotes.map(\.id))
+            let passwordProtectedReport = PasswordProtectedNoteReport.make(for: exportableNotes)
             let skippedRecentlyDeletedCount = notes.count - exportableNotes.count
             if skippedRecentlyDeletedCount > 0 {
                 log("Skipping \(skippedRecentlyDeletedCount) note\(skippedRecentlyDeletedCount == 1 ? "" : "s") in Recently Deleted")
             }
+            logPasswordProtectedNoteReport(passwordProtectedReport)
 
             // Incremental sync: load existing manifest and filter to new/changed notes
             let isSync = configurations.incrementalSync
@@ -312,6 +339,7 @@ class ExportViewModel: ObservableObject {
                         successfulNotes: 0,
                         failedNotes: 0,
                         failedAttachments: 0,
+                        passwordProtectedNoteTitles: passwordProtectedReport.titles,
                         completionDate: Date()
                     ))
                     // Still update lastSync timestamp
@@ -427,9 +455,10 @@ class ExportViewModel: ObservableObject {
                 successfulNotes: successfulNotes,
                 failedNotes: failedNotesCount,
                 failedAttachments: failedAttachmentsCount,
+                passwordProtectedNoteTitles: passwordProtectedReport.titles,
                 completionDate: Date()
             ))
-            Logger.noteExport.info("Export completed: \(successfulNotes) successful, \(self.failedNotesCount) failed notes, \(self.failedAttachmentsCount) failed attachments")
+            Logger.noteExport.info("Export completed: \(successfulNotes) successful, \(self.failedNotesCount) failed notes, \(self.failedAttachmentsCount) failed attachments, \(passwordProtectedReport.count) locked/password-protected notes")
 
         } catch {
             exportState = .error(error.localizedDescription)
@@ -1180,6 +1209,15 @@ class ExportViewModel: ObservableObject {
         logLock.lock()
         defer { logLock.unlock() }
         exportLog.append("[\(timestamp)] \(message)")
+    }
+
+    private func logPasswordProtectedNoteReport(_ report: PasswordProtectedNoteReport) {
+        guard report.hasNotes else { return }
+
+        log("INFO: \(report.summary)")
+        for title in report.titles {
+            log("  Locked note: \(title)")
+        }
     }
 
     // MARK: - Content Generation

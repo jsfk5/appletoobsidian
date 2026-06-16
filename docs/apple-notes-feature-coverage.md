@@ -39,14 +39,14 @@ The source feature inventory comes from Apple's Notes User Guide for Mac. Apple 
 | Audio recordings | Export audio attachment with Markdown link | Unknown | Audio add/remove should trigger export | Not covered | Audit audio attachment storage |
 | Audio transcripts | Export transcript into Markdown or sidecar file if available locally | Unknown | Transcript generation/edits should trigger export | Not covered | Research transcript storage |
 | Math Notes | Preserve visible expression/result text where possible | Unknown | Calculation changes should trigger export | Not covered | Audit Math Notes local data |
-| Folders and subfolders | Matching folder tree under output root | Supported | Folder moves must trigger path update | Manual validation | Add move regression test |
-| Moved notes | Markdown file relocates to new exported folder path | Supported | Folder/account ID must affect fingerprint | Manual validation | Add regression test for folder/account fingerprint |
+| Folders and subfolders | Matching folder tree under output root | Supported | Folder moves must trigger path update | Focused test | Add end-to-end move fixture |
+| Moved notes | Markdown file relocates to new exported folder path | Supported | Folder/account ID must affect fingerprint | Focused test | Add end-to-end move fixture |
 | Deleted notes | Previously exported file and associated folders are pruned | Supported | Must not delete outside output root | Manual validation | Add cleanup safety tests |
 | Recently Deleted | Do not export; prune prior export when applicable | Supported | Folder detection must remain correct | Needs test | Add Recently Deleted filter test |
 | Pins | Optional metadata, not physical folder placement | Unknown | Pin/unpin should not force destructive path changes | Not covered | Decide whether to export as frontmatter |
 | Tags | Obsidian tags or frontmatter metadata | Unknown | Tag edits should trigger export if supported | Not covered | Research tag storage and metadata format |
 | Smart Folders | Documented as virtual folders; avoid duplicate physical exports | Unknown | Smart Folder changes should not duplicate notes | Not covered | Treat source folder as canonical path |
-| Locked/password-protected notes | Export title and placeholder only, log locked note titles, and avoid treating blank body as normal content | Partial | Lock/unlock state should affect fingerprint without blocking sync | Not covered | Add locked-note logging/reporting and placeholder tests |
+| Locked/password-protected notes | Export title and placeholder only, log/report locked note titles, and avoid treating blank body as normal content | Partial | Lock/unlock state should affect fingerprint without blocking sync | Reporting test | Add locked-note placeholder export test |
 | Shared notes and folders | Export readable content; optional sharing metadata | Unknown | Shared note moves/permission changes may affect availability | Not covered | Audit shared notes in local DB |
 | Mentions/collaboration activity | Preserve visible text; activity metadata likely unsupported | Unknown | Collaboration metadata changes low priority | Not covered | Document unsupported metadata if absent |
 | Imported notes | Export same as normal notes once in Apple Notes database | Unknown | Imported folder/name changes should sync normally | Not covered | Test imported sample note |
@@ -54,7 +54,7 @@ The source feature inventory comes from Apple's Notes User Guide for Mac. Apple 
 ## Near-Term Test Plan
 
 1. Prove cleanup cannot delete outside the selected output root.
-2. Prove moved notes update exported paths when `accountId` or `folderId` changes.
+2. Add end-to-end moved-note fixture coverage for exported path relocation.
 3. Prove deleted notes are pruned from the export folder.
 4. Prove Recently Deleted notes are skipped and prior exports are removed.
 5. Prove checklists preserve checked and unchecked state.
@@ -62,7 +62,7 @@ The source feature inventory comes from Apple's Notes User Guide for Mac. Apple 
 7. Prove image attachments export and embed inline in Obsidian Markdown.
 8. Prove PDF and generic file attachments are linked without breaking the note body.
 9. Prove title normalization preserves display meaning while keeping filesystem-safe paths.
-10. Prove locked/password-protected notes export a clear placeholder and are listed in logs or export summary by title.
+10. Prove locked/password-protected notes export a clear placeholder body.
 
 ## Current Priorities
 
