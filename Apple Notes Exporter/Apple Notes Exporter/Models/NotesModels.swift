@@ -103,6 +103,14 @@ struct NotesNote: NotesItem {
     /// Check if note has any attachments
     var hasAttachments: Bool { !attachments.isEmpty }
 
+    var usesFallbackTitle: Bool {
+        title == Self.fallbackTitle(for: id)
+    }
+
+    var appearsLockedOrUnreadable: Bool {
+        isPasswordProtected || (usesFallbackTitle && plaintext.isEmpty && attachments.isEmpty)
+    }
+
     /// Generate sanitized filename for export
     var sanitizedFileName: String {
         var sanitized = title
@@ -154,7 +162,11 @@ struct NotesNote: NotesItem {
             return firstContentLine
         }
 
-        return "Note \(noteId)"
+        return fallbackTitle(for: noteId)
+    }
+
+    static func fallbackTitle(for noteId: String) -> String {
+        "Note \(noteId)"
     }
 }
 
