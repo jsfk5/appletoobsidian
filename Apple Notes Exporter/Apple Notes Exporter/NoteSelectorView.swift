@@ -331,7 +331,7 @@ struct NoteSelectorView: View {
             HStack {
                 HStack {
                     Image(systemName: "info.circle")
-                    Text("Locked notes export with their title and a placeholder body until they are unlocked in Apple Notes.")
+                    Text("Locked or unreadable notes are reported with their available title and location until they are unlocked in Apple Notes.")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
 

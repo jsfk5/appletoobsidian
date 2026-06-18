@@ -103,26 +103,49 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertEqual(notesNeedingExport.map(\.id), ["note-1"])
     }
 
-    func testPasswordProtectedNoteReportIncludesTitlesOnly() throws {
+    func testPasswordProtectedNoteReportIncludesLocationAndUnreadableFallbacks() throws {
         let locked = makeNote(
             id: "locked-1",
             title: "Locked Planning Note",
             plaintext: "Private locked body",
+            folderId: "private-folder",
+            accountId: "icloud",
             isPasswordProtected: true
+        )
+        let unreadable = makeNote(
+            id: "blank-1",
+            sourceFingerprint: "encrypted-or-unreadable-bytes",
+            title: NotesNote.fallbackTitle(for: "blank-1"),
+            plaintext: "",
+            folderId: "archive-folder",
+            accountId: "icloud",
+            isPasswordProtected: false
         )
         let unlocked = makeNote(
             id: "unlocked-1",
             title: "Regular Note",
-            plaintext: "Regular body"
+            plaintext: "Regular body",
+            folderId: "private-folder",
+            accountId: "icloud"
         )
 
-        let report = PasswordProtectedNoteReport.make(for: [unlocked, locked])
+        let report = PasswordProtectedNoteReport.make(
+            for: [unlocked, locked, unreadable],
+            accountNames: ["icloud": "iCloud"],
+            folderPaths: [
+                "archive-folder": "Archive/Locked",
+                "private-folder": "Personal"
+            ]
+        )
 
-        XCTAssertEqual(report.titles, ["Locked Planning Note"])
-        XCTAssertEqual(report.count, 1)
+        XCTAssertEqual(report.count, 2)
         XCTAssertTrue(report.hasNotes)
+        XCTAssertTrue(report.summaries.contains("Locked Planning Note - iCloud/Personal (locked)"))
+        XCTAssertTrue(report.summaries.contains("Note blank-1 - iCloud/Archive/Locked (unreadable/possibly locked)"))
         XCTAssertFalse(report.summary.contains("Private locked body"))
         XCTAssertFalse(report.summary.contains("Regular body"))
+        XCTAssertFalse(report.summaries.joined(separator: "\n").contains("Private locked body"))
+        XCTAssertFalse(report.summaries.joined(separator: "\n").contains("Regular body"))
     }
 
     func testLooseImageSourceUsesExportedAttachmentPath() throws {

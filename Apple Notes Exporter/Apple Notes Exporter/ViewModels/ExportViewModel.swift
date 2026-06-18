@@ -113,7 +113,7 @@ struct ExportStatistics: Equatable {
     var successfulNotes: Int = 0
     var failedNotes: Int = 0
     var failedAttachments: Int = 0
-    var passwordProtectedNoteTitles: [String] = []
+    var passwordProtectedNoteSummaries: [String] = []
     var completionDate: Date = Date()
 }
 
@@ -131,26 +131,69 @@ private struct StaleExportArtifacts: Sendable {
 }
 
 struct PasswordProtectedNoteReport: Equatable {
-    let titles: [String]
+    struct Entry: Equatable {
+        let title: String
+        let location: String
+        let isExplicitlyPasswordProtected: Bool
+
+        var summary: String {
+            let reason = isExplicitlyPasswordProtected ? "locked" : "unreadable/possibly locked"
+            return "\(title) - \(location) (\(reason))"
+        }
+    }
+
+    let entries: [Entry]
 
     var count: Int {
-        titles.count
+        entries.count
     }
 
     var hasNotes: Bool {
-        !titles.isEmpty
+        !entries.isEmpty
+    }
+
+    var summaries: [String] {
+        entries.map(\.summary)
     }
 
     var summary: String {
-        "\(count) locked/password-protected note\(count == 1 ? "" : "s") found. Body content is unavailable until unlocked in Apple Notes."
+        "\(count) locked/password-protected or unreadable note\(count == 1 ? "" : "s") found. Body content is unavailable until unlocked in Apple Notes."
     }
 
-    static func make(for notes: [NotesNote]) -> PasswordProtectedNoteReport {
-        let titles = notes
-            .filter(\.isPasswordProtected)
-            .map(\.title)
-            .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
-        return PasswordProtectedNoteReport(titles: titles)
+    static func make(
+        for notes: [NotesNote],
+        accountNames: [String: String] = [:],
+        folderPaths: [String: String] = [:]
+    ) -> PasswordProtectedNoteReport {
+        let entries = notes
+            .filter(\.appearsLockedOrUnreadable)
+            .map { note in
+                Entry(
+                    title: note.title,
+                    location: location(for: note, accountNames: accountNames, folderPaths: folderPaths),
+                    isExplicitlyPasswordProtected: note.isPasswordProtected
+                )
+            }
+            .sorted { lhs, rhs in
+                let locationOrder = lhs.location.localizedStandardCompare(rhs.location)
+                if locationOrder != .orderedSame {
+                    return locationOrder == .orderedAscending
+                }
+                return lhs.title.localizedStandardCompare(rhs.title) == .orderedAscending
+            }
+        return PasswordProtectedNoteReport(entries: entries)
+    }
+
+    private static func location(
+        for note: NotesNote,
+        accountNames: [String: String],
+        folderPaths: [String: String]
+    ) -> String {
+        let accountName = accountNames[note.accountId] ?? "Unknown Account"
+        guard let folderPath = folderPaths[note.folderId], !folderPath.isEmpty else {
+            return accountName
+        }
+        return "\(accountName)/\(folderPath)"
     }
 }
 
@@ -271,7 +314,13 @@ class ExportViewModel: ObservableObject {
         do {
             let exportableNotes = try await notesExcludingRecentlyDeleted(notes)
             let currentExportNoteIDs = Set(exportableNotes.map(\.id))
-            let passwordProtectedReport = PasswordProtectedNoteReport.make(for: exportableNotes)
+            let accountNames = try await accountNameLookup()
+            let folderPaths = try await folderPathLookup()
+            let passwordProtectedReport = PasswordProtectedNoteReport.make(
+                for: exportableNotes,
+                accountNames: accountNames,
+                folderPaths: folderPaths
+            )
             let skippedRecentlyDeletedCount = notes.count - exportableNotes.count
             if skippedRecentlyDeletedCount > 0 {
                 log("Skipping \(skippedRecentlyDeletedCount) note\(skippedRecentlyDeletedCount == 1 ? "" : "s") in Recently Deleted")
@@ -339,7 +388,7 @@ class ExportViewModel: ObservableObject {
                         successfulNotes: 0,
                         failedNotes: 0,
                         failedAttachments: 0,
-                        passwordProtectedNoteTitles: passwordProtectedReport.titles,
+                        passwordProtectedNoteSummaries: passwordProtectedReport.summaries,
                         completionDate: Date()
                     ))
                     // Still update lastSync timestamp
@@ -455,10 +504,10 @@ class ExportViewModel: ObservableObject {
                 successfulNotes: successfulNotes,
                 failedNotes: failedNotesCount,
                 failedAttachments: failedAttachmentsCount,
-                passwordProtectedNoteTitles: passwordProtectedReport.titles,
+                passwordProtectedNoteSummaries: passwordProtectedReport.summaries,
                 completionDate: Date()
             ))
-            Logger.noteExport.info("Export completed: \(successfulNotes) successful, \(self.failedNotesCount) failed notes, \(self.failedAttachmentsCount) failed attachments, \(passwordProtectedReport.count) locked/password-protected notes")
+            Logger.noteExport.info("Export completed: \(successfulNotes) successful, \(self.failedNotesCount) failed notes, \(self.failedAttachmentsCount) failed attachments, \(passwordProtectedReport.count) locked/password-protected or unreadable notes")
 
         } catch {
             exportState = .error(error.localizedDescription)
@@ -1215,8 +1264,8 @@ class ExportViewModel: ObservableObject {
         guard report.hasNotes else { return }
 
         log("INFO: \(report.summary)")
-        for title in report.titles {
-            log("  Locked note: \(title)")
+        for entry in report.entries {
+            log("  Locked note: \(entry.summary)")
         }
     }
 
@@ -1561,6 +1610,29 @@ class ExportViewModel: ObservableObject {
         }
 
         return hierarchy
+    }
+
+    private func accountNameLookup() async throws -> [String: String] {
+        let accounts = try await repository.fetchAccounts()
+        var lookup: [String: String] = [:]
+        for account in accounts {
+            lookup[account.id] = account.name
+        }
+        return lookup
+    }
+
+    private func folderPathLookup() async throws -> [String: String] {
+        let folders = try await repository.fetchFolders()
+        var folderLookup: [String: NotesFolder] = [:]
+        for folder in folders {
+            folderLookup[folder.id] = folder
+        }
+
+        var pathLookup: [String: String] = [:]
+        for folder in folders {
+            pathLookup[folder.id] = buildFolderPath(folderId: folder.id, folderLookup: folderLookup)
+        }
+        return pathLookup
     }
 
     private func flattenNotesWithPaths(

@@ -297,11 +297,11 @@ class AppleNotesExporterState: ObservableObject {
         switch exportViewModel.exportState {
         case .completed(let statistics):
             print("Apple Notes Exporter: exported \(statistics.successfulNotes) notes, \(statistics.failedNotes) failed notes, \(statistics.failedAttachments) failed attachments.")
-            if !statistics.passwordProtectedNoteTitles.isEmpty {
-                let count = statistics.passwordProtectedNoteTitles.count
-                print("Apple Notes Exporter: found \(count) locked/password-protected note\(count == 1 ? "" : "s"); body content is unavailable until unlocked in Apple Notes.")
-                for title in statistics.passwordProtectedNoteTitles {
-                    print("Apple Notes Exporter: locked note: \(title)")
+            if !statistics.passwordProtectedNoteSummaries.isEmpty {
+                let count = statistics.passwordProtectedNoteSummaries.count
+                print("Apple Notes Exporter: found \(count) locked/password-protected or unreadable note\(count == 1 ? "" : "s"); body content is unavailable until unlocked in Apple Notes.")
+                for summary in statistics.passwordProtectedNoteSummaries {
+                    print("Apple Notes Exporter: locked note: \(summary)")
                 }
             }
             finishLaunchExport(options, status: statistics.failedNotes == 0 && statistics.failedAttachments == 0 ? 0 : 1)

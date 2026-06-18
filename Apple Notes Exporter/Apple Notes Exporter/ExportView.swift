@@ -49,14 +49,28 @@ struct ExportView: View {
                                 .font(.headline)
                         }
 
-                        // Show statistics
-                        if !stats.passwordProtectedNoteTitles.isEmpty {
-                            HStack {
-                                Image(systemName: "lock.fill")
-                                    .foregroundColor(.secondary)
-                                Text("\(stats.passwordProtectedNoteTitles.count) locked/password-protected note\(stats.passwordProtectedNoteTitles.count == 1 ? "" : "s") found with placeholder body")
-                                    .font(.headline)
-                                    .foregroundColor(.secondary)
+                        if !stats.passwordProtectedNoteSummaries.isEmpty {
+                            VStack(alignment: .leading, spacing: 3) {
+                                HStack {
+                                    Image(systemName: "lock.fill")
+                                        .foregroundColor(.secondary)
+                                    Text("\(stats.passwordProtectedNoteSummaries.count) locked/password-protected or unreadable note\(stats.passwordProtectedNoteSummaries.count == 1 ? "" : "s") found")
+                                        .font(.headline)
+                                        .foregroundColor(.secondary)
+                                }
+
+                                ForEach(Array(stats.passwordProtectedNoteSummaries.prefix(5)), id: \.self) { summary in
+                                    Text(summary)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(1)
+                                }
+
+                                if stats.passwordProtectedNoteSummaries.count > 5 {
+                                    Text("+ \(stats.passwordProtectedNoteSummaries.count - 5) more in the export log")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
                             }
                         }
 
