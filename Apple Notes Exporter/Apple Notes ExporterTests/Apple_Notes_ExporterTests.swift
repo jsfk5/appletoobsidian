@@ -148,6 +148,49 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertFalse(report.summaries.joined(separator: "\n").contains("Regular body"))
     }
 
+    @MainActor
+    func testStaleManifestCleanupDoesNotDeleteOutsideOutputRoot() throws {
+        let fileManager = FileManager.default
+        let baseURL = fileManager.temporaryDirectory
+            .appendingPathComponent("AppleNotesExporterCleanupGuard-\(UUID().uuidString)", isDirectory: true)
+        let outputRootURL = baseURL.appendingPathComponent("Export", isDirectory: true)
+        let insideFolderURL = outputRootURL.appendingPathComponent("iCloud", isDirectory: true)
+        let insideStaleURL = insideFolderURL.appendingPathComponent("Stale.md")
+        let outsideFileURL = baseURL.appendingPathComponent("outside.md")
+        let outsideAttachmentURL = baseURL.appendingPathComponent("outside-attachment.jpg")
+
+        try fileManager.createDirectory(at: insideFolderURL, withIntermediateDirectories: true)
+        try "stale".write(to: insideStaleURL, atomically: true, encoding: .utf8)
+        try "outside".write(to: outsideFileURL, atomically: true, encoding: .utf8)
+        try "outside attachment".write(to: outsideAttachmentURL, atomically: true, encoding: .utf8)
+        defer { try? fileManager.removeItem(at: baseURL) }
+
+        var manifest = SyncManifest.empty()
+        manifest.recordExport(
+            noteId: "stale-inside-note",
+            modificationDate: Date(timeIntervalSince1970: 1_700_000_000),
+            exportedPath: "iCloud/Stale.md",
+            attachmentPaths: ["../outside-attachment.jpg"]
+        )
+        manifest.recordExport(
+            noteId: "stale-traversal-note",
+            modificationDate: Date(timeIntervalSince1970: 1_700_000_000),
+            exportedPath: "../outside.md"
+        )
+
+        let removedCount = try ExportViewModel().removeManifestEntriesNotInCurrentExportSet(
+            from: &manifest,
+            currentNoteIDs: [],
+            outputRootURL: outputRootURL
+        )
+
+        XCTAssertEqual(removedCount, 2)
+        XCTAssertFalse(fileManager.fileExists(atPath: insideStaleURL.path))
+        XCTAssertTrue(fileManager.fileExists(atPath: outsideFileURL.path))
+        XCTAssertTrue(fileManager.fileExists(atPath: outsideAttachmentURL.path))
+        XCTAssertTrue(manifest.notes.isEmpty)
+    }
+
     func testLooseImageSourceUsesExportedAttachmentPath() throws {
         var db: OpaquePointer?
         XCTAssertEqual(sqlite3_open(":memory:", &db), SQLITE_OK)

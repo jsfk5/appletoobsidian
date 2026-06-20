@@ -2167,7 +2167,7 @@ class ExportViewModel: ObservableObject {
         }
     }
 
-    private func removeManifestEntriesNotInCurrentExportSet(
+    func removeManifestEntriesNotInCurrentExportSet(
         from manifest: inout SyncManifest,
         currentNoteIDs: Set<String>,
         outputRootURL: URL
