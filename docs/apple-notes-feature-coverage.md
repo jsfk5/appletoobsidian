@@ -41,7 +41,7 @@ The source feature inventory comes from Apple's Notes User Guide for Mac. Apple 
 | Math Notes | Preserve visible expression/result text where possible | Unknown | Calculation changes should trigger export | Not covered | Audit Math Notes local data |
 | Folders and subfolders | Matching folder tree under output root | Supported | Folder moves must trigger path update | Focused test | Add end-to-end move fixture |
 | Moved notes | Markdown file relocates to new exported folder path | Supported | Folder/account ID must affect fingerprint | Focused test | Add end-to-end move fixture |
-| Deleted notes | Previously exported file and associated folders are pruned | Supported | Must not delete outside output root | Manual validation | Add cleanup safety tests |
+| Deleted notes | Previously exported file and associated folders are pruned | Supported | Must not delete outside output root | Focused cleanup guard test | Add deleted-note pruning fixture |
 | Recently Deleted | Do not export; prune prior export when applicable | Supported | Folder detection must remain correct | Needs test | Add Recently Deleted filter test |
 | Pins | Optional metadata, not physical folder placement | Unknown | Pin/unpin should not force destructive path changes | Not covered | Decide whether to export as frontmatter |
 | Tags | Obsidian tags or frontmatter metadata | Unknown | Tag edits should trigger export if supported | Not covered | Research tag storage and metadata format |
@@ -53,16 +53,15 @@ The source feature inventory comes from Apple's Notes User Guide for Mac. Apple 
 
 ## Near-Term Test Plan
 
-1. Prove cleanup cannot delete outside the selected output root.
-2. Add end-to-end moved-note fixture coverage for exported path relocation.
-3. Prove deleted notes are pruned from the export folder.
-4. Prove Recently Deleted notes are skipped and prior exports are removed.
-5. Prove checklists preserve checked and unchecked state.
-6. Prove Apple Notes links become Obsidian wikilinks after target notes are renamed or moved.
-7. Prove image attachments export and embed inline in Obsidian Markdown.
-8. Prove PDF and generic file attachments are linked without breaking the note body.
-9. Prove title normalization preserves display meaning while keeping filesystem-safe paths.
-10. Prove locked/password-protected notes export a clear placeholder body.
+1. Add end-to-end moved-note fixture coverage for exported path relocation.
+2. Prove deleted notes are pruned from the export folder.
+3. Prove Recently Deleted notes are skipped and prior exports are removed.
+4. Prove checklists preserve checked and unchecked state.
+5. Prove Apple Notes links become Obsidian wikilinks after target notes are renamed or moved.
+6. Prove image attachments export and embed inline in Obsidian Markdown.
+7. Prove PDF and generic file attachments are linked without breaking the note body.
+8. Prove title normalization preserves display meaning while keeping filesystem-safe paths.
+9. Prove locked/password-protected notes export a clear placeholder body.
 
 ## Current Priorities
 
