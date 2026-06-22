@@ -1548,7 +1548,7 @@ class ExportViewModel: ObservableObject {
         }
     }
 
-    private func isInRecentlyDeleted(folderId: String, folderLookup: [String: NotesFolder]) -> Bool {
+    func isInRecentlyDeleted(folderId: String, folderLookup: [String: NotesFolder]) -> Bool {
         var currentFolderId: String? = folderId
         var visitedFolderIDs: Set<String> = []
 
@@ -1567,7 +1567,7 @@ class ExportViewModel: ObservableObject {
         return false
     }
 
-    private func isRecentlyDeletedFolderName(_ name: String) -> Bool {
+    func isRecentlyDeletedFolderName(_ name: String) -> Bool {
         name.trimmingCharacters(in: .whitespacesAndNewlines)
             .localizedCaseInsensitiveCompare("Recently Deleted") == .orderedSame
     }
