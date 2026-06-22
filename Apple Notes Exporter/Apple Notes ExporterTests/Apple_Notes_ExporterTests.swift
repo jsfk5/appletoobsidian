@@ -191,6 +191,26 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertTrue(manifest.notes.isEmpty)
     }
 
+    @MainActor
+    func testRecentlyDeletedFolderChainIsExcluded() throws {
+        let folderLookup: [String: NotesFolder] = [
+            "root": NotesFolder(id: "root", name: "Notes", parentId: nil, accountId: "icloud"),
+            "active": NotesFolder(id: "active", name: "Projects", parentId: "root", accountId: "icloud"),
+            "deleted": NotesFolder(id: "deleted", name: " Recently Deleted ", parentId: "root", accountId: "icloud"),
+            "deleted-child": NotesFolder(id: "deleted-child", name: "Nested", parentId: "deleted", accountId: "icloud"),
+            "loop-a": NotesFolder(id: "loop-a", name: "Loop A", parentId: "loop-b", accountId: "icloud"),
+            "loop-b": NotesFolder(id: "loop-b", name: "Loop B", parentId: "loop-a", accountId: "icloud")
+        ]
+
+        let viewModel = ExportViewModel()
+
+        XCTAssertFalse(viewModel.isInRecentlyDeleted(folderId: "active", folderLookup: folderLookup))
+        XCTAssertTrue(viewModel.isInRecentlyDeleted(folderId: "deleted", folderLookup: folderLookup))
+        XCTAssertTrue(viewModel.isInRecentlyDeleted(folderId: "deleted-child", folderLookup: folderLookup))
+        XCTAssertFalse(viewModel.isInRecentlyDeleted(folderId: "missing", folderLookup: folderLookup))
+        XCTAssertFalse(viewModel.isInRecentlyDeleted(folderId: "loop-a", folderLookup: folderLookup))
+    }
+
     func testLooseImageSourceUsesExportedAttachmentPath() throws {
         var db: OpaquePointer?
         XCTAssertEqual(sqlite3_open(":memory:", &db), SQLITE_OK)

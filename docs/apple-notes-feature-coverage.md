@@ -42,7 +42,7 @@ The source feature inventory comes from Apple's Notes User Guide for Mac. Apple 
 | Folders and subfolders | Matching folder tree under output root | Supported | Folder moves must trigger path update | Focused test | Add end-to-end move fixture |
 | Moved notes | Markdown file relocates to new exported folder path | Supported | Folder/account ID must affect fingerprint | Focused test | Add end-to-end move fixture |
 | Deleted notes | Previously exported file and associated folders are pruned | Supported | Must not delete outside output root | Focused cleanup guard test | Add deleted-note pruning fixture |
-| Recently Deleted | Do not export; prune prior export when applicable | Supported | Folder detection must remain correct | Needs test | Add Recently Deleted filter test |
+| Recently Deleted | Do not export; prune prior export when applicable | Supported | Folder detection must remain correct | Focused folder-chain filter test | Add Recently Deleted pruning fixture |
 | Pins | Optional metadata, not physical folder placement | Unknown | Pin/unpin should not force destructive path changes | Not covered | Decide whether to export as frontmatter |
 | Tags | Obsidian tags or frontmatter metadata | Unknown | Tag edits should trigger export if supported | Not covered | Research tag storage and metadata format |
 | Smart Folders | Documented as virtual folders; avoid duplicate physical exports | Unknown | Smart Folder changes should not duplicate notes | Not covered | Treat source folder as canonical path |
@@ -55,7 +55,7 @@ The source feature inventory comes from Apple's Notes User Guide for Mac. Apple 
 
 1. Add end-to-end moved-note fixture coverage for exported path relocation.
 2. Prove deleted notes are pruned from the export folder.
-3. Prove Recently Deleted notes are skipped and prior exports are removed.
+3. Prove Recently Deleted prior exports are removed.
 4. Prove checklists preserve checked and unchecked state.
 5. Prove Apple Notes links become Obsidian wikilinks after target notes are renamed or moved.
 6. Prove image attachments export and embed inline in Obsidian Markdown.
