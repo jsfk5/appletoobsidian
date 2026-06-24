@@ -192,6 +192,59 @@ final class Apple_Notes_ExporterTests: XCTestCase {
     }
 
     @MainActor
+    func testStaleManifestCleanupPrunesDeletedNoteArtifactsAndPreservesCurrentOnes() throws {
+        let fileManager = FileManager.default
+        let baseURL = fileManager.temporaryDirectory
+            .appendingPathComponent("AppleNotesExporterDeletedNotePrune-\(UUID().uuidString)", isDirectory: true)
+        let outputRootURL = baseURL.appendingPathComponent("Export", isDirectory: true)
+        let folderURL = outputRootURL.appendingPathComponent("iCloud", isDirectory: true)
+        let deletedFileURL = folderURL.appendingPathComponent("Deleted.md")
+        let currentFileURL = folderURL.appendingPathComponent("Current.md")
+        let deletedAttachmentURL = folderURL
+            .appendingPathComponent("Deleted (Attachments)", isDirectory: true)
+            .appendingPathComponent("deleted.jpg")
+        let currentAttachmentURL = folderURL
+            .appendingPathComponent("Current (Attachments)", isDirectory: true)
+            .appendingPathComponent("current.jpg")
+
+        try fileManager.createDirectory(at: deletedAttachmentURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: currentAttachmentURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "deleted".write(to: deletedFileURL, atomically: true, encoding: .utf8)
+        try "current".write(to: currentFileURL, atomically: true, encoding: .utf8)
+        try "deleted attachment".write(to: deletedAttachmentURL, atomically: true, encoding: .utf8)
+        try "current attachment".write(to: currentAttachmentURL, atomically: true, encoding: .utf8)
+        defer { try? fileManager.removeItem(at: baseURL) }
+
+        var manifest = SyncManifest.empty()
+        manifest.recordExport(
+            noteId: "current-note",
+            modificationDate: Date(timeIntervalSince1970: 1_700_000_000),
+            exportedPath: "iCloud/Current.md",
+            attachmentPaths: ["iCloud/Current (Attachments)/current.jpg"]
+        )
+        manifest.recordExport(
+            noteId: "deleted-note",
+            modificationDate: Date(timeIntervalSince1970: 1_700_000_000),
+            exportedPath: "iCloud/Deleted.md",
+            attachmentPaths: ["iCloud/Deleted (Attachments)/deleted.jpg"]
+        )
+
+        let removedCount = try ExportViewModel().removeManifestEntriesNotInCurrentExportSet(
+            from: &manifest,
+            currentNoteIDs: ["current-note"],
+            outputRootURL: outputRootURL
+        )
+
+        XCTAssertEqual(removedCount, 1)
+        XCTAssertFalse(fileManager.fileExists(atPath: deletedFileURL.path))
+        XCTAssertFalse(fileManager.fileExists(atPath: deletedAttachmentURL.path))
+        XCTAssertFalse(fileManager.fileExists(atPath: deletedAttachmentURL.deletingLastPathComponent().path))
+        XCTAssertTrue(fileManager.fileExists(atPath: currentFileURL.path))
+        XCTAssertTrue(fileManager.fileExists(atPath: currentAttachmentURL.path))
+        XCTAssertEqual(Set(manifest.notes.keys), ["current-note"])
+    }
+
+    @MainActor
     func testRecentlyDeletedFolderChainIsExcluded() throws {
         let folderLookup: [String: NotesFolder] = [
             "root": NotesFolder(id: "root", name: "Notes", parentId: nil, accountId: "icloud"),
