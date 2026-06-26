@@ -197,6 +197,27 @@ struct PasswordProtectedNoteReport: Equatable {
     }
 }
 
+enum LockedNotePlaceholder {
+    private static let lockedMessage = "This note is locked in Apple Notes. The title and metadata were exported, but the body is unavailable until the note is unlocked."
+    private static let unreadableMessage = "This note is locked or unreadable in Apple Notes. The available title and metadata were exported, but the body is unavailable until the note is unlocked or readable in Apple Notes."
+
+    static func html(for note: NotesNote) -> String? {
+        guard note.appearsLockedOrUnreadable else {
+            return nil
+        }
+
+        let message = note.isPasswordProtected ? lockedMessage : unreadableMessage
+        return """
+        <html>
+        <body>
+            <h1>\(note.title.htmlEscaped)</h1>
+            <p>\(message.htmlEscaped)</p>
+        </body>
+        </html>
+        """
+    }
+}
+
 enum NoteContentFingerprint {
     static func value(for note: NotesNote) -> String {
         let attachmentSignature = note.attachments
@@ -1403,15 +1424,8 @@ class ExportViewModel: ObservableObject {
 
         // Generate HTML on-demand during export if not already present
         let htmlBody: String
-        if note.isPasswordProtected {
-            htmlBody = """
-            <html>
-            <body>
-                <h1>\(note.title.htmlEscaped)</h1>
-                <p>This note is locked in Apple Notes. The title and metadata were exported, but the body is unavailable until the note is unlocked.</p>
-            </body>
-            </html>
-            """
+        if let lockedPlaceholderHTML = LockedNotePlaceholder.html(for: note) {
+            htmlBody = lockedPlaceholderHTML
         } else if let existingHTML = note.htmlBody {
             htmlBody = existingHTML
         } else {

@@ -46,7 +46,7 @@ The source feature inventory comes from Apple's Notes User Guide for Mac. Apple 
 | Pins | Optional metadata, not physical folder placement | Unknown | Pin/unpin should not force destructive path changes | Not covered | Decide whether to export as frontmatter |
 | Tags | Obsidian tags or frontmatter metadata | Unknown | Tag edits should trigger export if supported | Not covered | Research tag storage and metadata format |
 | Smart Folders | Documented as virtual folders; avoid duplicate physical exports | Unknown | Smart Folder changes should not duplicate notes | Not covered | Treat source folder as canonical path |
-| Locked/password-protected notes | Export title or fallback ID plus placeholder only, report account/folder location, and avoid treating blank body as normal content | Partial | Lock/unlock state should affect fingerprint without blocking sync | Reporting + unreadable fallback test | Add locked-note placeholder export test |
+| Locked/password-protected notes | Export title or fallback ID plus placeholder only, report account/folder location, and avoid treating blank body as normal content | Partial | Lock/unlock state should affect fingerprint without blocking sync | Reporting + unreadable fallback + placeholder tests | Add end-to-end locked-note export fixture |
 | Shared notes and folders | Export readable content; optional sharing metadata | Unknown | Shared note moves/permission changes may affect availability | Not covered | Audit shared notes in local DB |
 | Mentions/collaboration activity | Preserve visible text; activity metadata likely unsupported | Unknown | Collaboration metadata changes low priority | Not covered | Document unsupported metadata if absent |
 | Imported notes | Export same as normal notes once in Apple Notes database | Unknown | Imported folder/name changes should sync normally | Not covered | Test imported sample note |
@@ -60,7 +60,7 @@ The source feature inventory comes from Apple's Notes User Guide for Mac. Apple 
 5. Prove image attachments export and embed inline in Obsidian Markdown.
 6. Prove PDF and generic file attachments are linked without breaking the note body.
 7. Prove title normalization preserves display meaning while keeping filesystem-safe paths.
-8. Prove locked/password-protected notes export a clear placeholder body.
+8. Add an end-to-end locked-note export fixture once a safe synthetic Notes database fixture exists.
 
 ## Current Priorities
 
