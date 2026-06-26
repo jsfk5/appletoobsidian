@@ -148,6 +148,51 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertFalse(report.summaries.joined(separator: "\n").contains("Regular body"))
     }
 
+    func testLockedNotePlaceholderUsesTitleAndDoesNotExposeBody() throws {
+        let note = makeNote(
+            id: "locked-1",
+            title: "Locked <Planning> Note",
+            plaintext: "Private locked body",
+            isPasswordProtected: true
+        )
+
+        let html = try XCTUnwrap(LockedNotePlaceholder.html(for: note))
+
+        XCTAssertTrue(html.contains("Locked &lt;Planning&gt; Note"))
+        XCTAssertTrue(html.contains("This note is locked in Apple Notes."))
+        XCTAssertTrue(html.contains("body is unavailable until the note is unlocked"))
+        XCTAssertFalse(html.contains("Private locked body"))
+        XCTAssertFalse(html.contains("<Planning>"))
+    }
+
+    func testUnreadableFallbackNotePlaceholderUsesFallbackTitleAndDoesNotExposeBody() throws {
+        let note = makeNote(
+            id: "blank-1",
+            sourceFingerprint: "encrypted-or-unreadable-bytes",
+            title: NotesNote.fallbackTitle(for: "blank-1"),
+            plaintext: "",
+            isPasswordProtected: false
+        )
+
+        let html = try XCTUnwrap(LockedNotePlaceholder.html(for: note))
+
+        XCTAssertTrue(html.contains("Note blank-1"))
+        XCTAssertTrue(html.contains("locked or unreadable in Apple Notes"))
+        XCTAssertTrue(html.contains("available title and metadata were exported"))
+        XCTAssertTrue(html.contains("until the note is unlocked or readable in Apple Notes"))
+    }
+
+    func testUnlockedNoteDoesNotUseLockedNotePlaceholder() throws {
+        let note = makeNote(
+            id: "unlocked-1",
+            title: "Regular Note",
+            plaintext: "Regular body",
+            isPasswordProtected: false
+        )
+
+        XCTAssertNil(LockedNotePlaceholder.html(for: note))
+    }
+
     @MainActor
     func testStaleManifestCleanupDoesNotDeleteOutsideOutputRoot() throws {
         let fileManager = FileManager.default
