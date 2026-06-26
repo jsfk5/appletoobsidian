@@ -216,6 +216,26 @@ enum LockedNotePlaceholder {
         </html>
         """
     }
+
+    static func markdown(for note: NotesNote) -> String? {
+        guard note.appearsLockedOrUnreadable else {
+            return nil
+        }
+
+        let title = note.title.singleLineMarkdownText
+        let message: String
+        if note.isPasswordProtected {
+            message = "\(title) is a locked note from Apple Notes. Its body content is unavailable until the note is unlocked in Apple Notes."
+        } else {
+            message = "\(title) is a locked or unreadable note from Apple Notes. Its body content is unavailable until the note is unlocked or readable in Apple Notes."
+        }
+
+        return """
+        # \(title)
+
+        \(message)
+        """
+    }
 }
 
 enum NoteContentFingerprint {
@@ -1323,6 +1343,10 @@ class ExportViewModel: ObservableObject {
             )
             return noteWithHTML.toPlainText()
         case .markdown:
+            if let lockedPlaceholderMarkdown = LockedNotePlaceholder.markdown(for: note) {
+                return lockedPlaceholderMarkdown
+            }
+
             // Generate HTML first, then convert it to markdown.
             var markdownHTMLConfiguration = configurations.html
             markdownHTMLConfiguration.embedImagesInline = false
@@ -2514,6 +2538,14 @@ class ExportViewModel: ObservableObject {
 // MARK: - String Extensions for Escaping
 
 extension String {
+    var singleLineMarkdownText: String {
+        self
+            .replacingOccurrences(of: "\r\n", with: " ")
+            .replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     var htmlEscaped: String {
         self
             .replacingOccurrences(of: "&", with: "&amp;")

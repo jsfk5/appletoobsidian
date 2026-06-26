@@ -182,6 +182,54 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertTrue(html.contains("until the note is unlocked or readable in Apple Notes"))
     }
 
+    func testLockedNoteMarkdownPlaceholderIsObsidianReadableAndDoesNotExposeBody() throws {
+        let note = makeNote(
+            id: "locked-1",
+            title: "Locked Planning Note",
+            plaintext: "Private locked body",
+            isPasswordProtected: true
+        )
+
+        let markdown = try XCTUnwrap(LockedNotePlaceholder.markdown(for: note))
+
+        XCTAssertEqual(
+            markdown,
+            """
+            # Locked Planning Note
+
+            Locked Planning Note is a locked note from Apple Notes. Its body content is unavailable until the note is unlocked in Apple Notes.
+            """
+        )
+        XCTAssertFalse(markdown.contains("Private locked body"))
+        XCTAssertFalse(markdown.contains("body {"))
+        XCTAssertFalse(markdown.contains("pre {"))
+        XCTAssertFalse(markdown.contains("```"))
+    }
+
+    func testUnreadableFallbackMarkdownPlaceholderUsesFallbackTitle() throws {
+        let note = makeNote(
+            id: "212",
+            sourceFingerprint: "encrypted-or-unreadable-bytes",
+            title: NotesNote.fallbackTitle(for: "212"),
+            plaintext: "",
+            isPasswordProtected: false
+        )
+
+        let markdown = try XCTUnwrap(LockedNotePlaceholder.markdown(for: note))
+
+        XCTAssertEqual(
+            markdown,
+            """
+            # Note 212
+
+            Note 212 is a locked or unreadable note from Apple Notes. Its body content is unavailable until the note is unlocked or readable in Apple Notes.
+            """
+        )
+        XCTAssertFalse(markdown.contains("body {"))
+        XCTAssertFalse(markdown.contains("pre {"))
+        XCTAssertFalse(markdown.contains("```"))
+    }
+
     func testUnlockedNoteDoesNotUseLockedNotePlaceholder() throws {
         let note = makeNote(
             id: "unlocked-1",
@@ -191,6 +239,7 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         )
 
         XCTAssertNil(LockedNotePlaceholder.html(for: note))
+        XCTAssertNil(LockedNotePlaceholder.markdown(for: note))
     }
 
     @MainActor
