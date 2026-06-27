@@ -75,7 +75,8 @@ struct SyncManifest: Codable {
     func notesNeedingExport(
         from notes: [NotesNote],
         exportFingerprint: String? = nil,
-        contentFingerprint: (NotesNote) -> String? = { _ in nil }
+        contentFingerprint: (NotesNote) -> String? = { _ in nil },
+        acceptedContentFingerprints: (NotesNote) -> Set<String>? = { _ in nil }
     ) -> [NotesNote] {
         return notes.filter { note in
             guard let entry = self.notes[note.id] else {
@@ -85,7 +86,13 @@ struct SyncManifest: Codable {
             if entry.exportFingerprint != exportFingerprint {
                 return true
             }
-            if entry.contentFingerprint != contentFingerprint(note) {
+            let currentContentFingerprint = contentFingerprint(note)
+            if let acceptedFingerprints = acceptedContentFingerprints(note) {
+                guard let entryContentFingerprint = entry.contentFingerprint,
+                      acceptedFingerprints.contains(entryContentFingerprint) else {
+                    return true
+                }
+            } else if entry.contentFingerprint != currentContentFingerprint {
                 return true
             }
             // Note exists — check if it's been modified since last export
