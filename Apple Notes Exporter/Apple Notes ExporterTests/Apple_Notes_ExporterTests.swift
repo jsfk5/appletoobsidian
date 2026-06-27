@@ -20,6 +20,7 @@
 
 import XCTest
 import SQLite3
+import CryptoKit
 @testable import Apple_Notes_Exporter
 
 final class Apple_Notes_ExporterTests: XCTestCase {
@@ -230,6 +231,60 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertFalse(markdown.contains("```"))
     }
 
+    func testUnreadableFallbackFingerprintForcesPlaceholderMigration() throws {
+        let note = makeNote(
+            id: "212",
+            sourceFingerprint: "encrypted-or-unreadable-bytes",
+            title: NotesNote.fallbackTitle(for: "212"),
+            plaintext: "",
+            isPasswordProtected: false
+        )
+
+        XCTAssertNotEqual(
+            NoteContentFingerprint.value(for: note),
+            legacyContentFingerprintWithoutLockedPlaceholderVersion(for: note)
+        )
+    }
+
+    func testRegularNoteFingerprintDoesNotChangeForLockedPlaceholderMigration() throws {
+        let note = makeNote(
+            id: "regular-1",
+            title: "Regular Note",
+            plaintext: "Regular body",
+            isPasswordProtected: false
+        )
+
+        XCTAssertEqual(
+            NoteContentFingerprint.value(for: note),
+            legacyContentFingerprintWithoutLockedPlaceholderVersion(for: note)
+        )
+    }
+
+    func testManifestAcceptsEmptyPlaceholderVersionFieldFingerprintForRegularNotes() throws {
+        let note = makeNote(
+            id: "regular-1",
+            title: "Regular Note",
+            plaintext: "Regular body",
+            isPasswordProtected: false
+        )
+
+        var manifest = SyncManifest.empty()
+        manifest.recordExport(
+            noteId: note.id,
+            modificationDate: note.modificationDate,
+            exportedPath: "iCloud/Regular Note.md",
+            contentFingerprint: emptyPlaceholderVersionFieldContentFingerprint(for: note)
+        )
+
+        let notesNeedingExport = manifest.notesNeedingExport(
+            from: [note],
+            contentFingerprint: { NoteContentFingerprint.value(for: $0) },
+            acceptedContentFingerprints: { NoteContentFingerprint.acceptedValues(for: $0) }
+        )
+
+        XCTAssertEqual(notesNeedingExport.map(\.id), [])
+    }
+
     func testUnlockedNoteDoesNotUseLockedNotePlaceholder() throws {
         let note = makeNote(
             id: "unlocked-1",
@@ -435,6 +490,47 @@ final class Apple_Notes_ExporterTests: XCTestCase {
             attachments: attachments,
             isPasswordProtected: isPasswordProtected
         )
+    }
+
+    private func legacyContentFingerprintWithoutLockedPlaceholderVersion(for note: NotesNote) -> String {
+        let attachmentSignature = note.attachments
+            .map { "\($0.id)|\($0.typeUTI)|\($0.filename ?? "")" }
+            .sorted()
+            .joined(separator: "\n")
+        let payload = [
+            note.id,
+            note.identifier ?? "",
+            note.sourceFingerprint ?? "",
+            note.accountId,
+            note.folderId,
+            note.title,
+            note.plaintext,
+            attachmentSignature,
+            note.isPasswordProtected ? "locked" : "unlocked"
+        ].joined(separator: "\u{1F}")
+        let digest = SHA256.hash(data: Data(payload.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func emptyPlaceholderVersionFieldContentFingerprint(for note: NotesNote) -> String {
+        let attachmentSignature = note.attachments
+            .map { "\($0.id)|\($0.typeUTI)|\($0.filename ?? "")" }
+            .sorted()
+            .joined(separator: "\n")
+        let payload = [
+            note.id,
+            note.identifier ?? "",
+            note.sourceFingerprint ?? "",
+            note.accountId,
+            note.folderId,
+            note.title,
+            note.plaintext,
+            attachmentSignature,
+            note.isPasswordProtected ? "locked" : "unlocked",
+            note.appearsLockedOrUnreadable ? LockedNotePlaceholder.contentFingerprintVersion : ""
+        ].joined(separator: "\u{1F}")
+        let digest = SHA256.hash(data: Data(payload.utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
     }
 
 }

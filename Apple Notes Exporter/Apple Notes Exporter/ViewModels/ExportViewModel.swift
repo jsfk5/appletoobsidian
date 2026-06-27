@@ -198,6 +198,8 @@ struct PasswordProtectedNoteReport: Equatable {
 }
 
 enum LockedNotePlaceholder {
+    static let contentFingerprintVersion = "locked-note-placeholder-markdown-v2"
+
     private static let lockedMessage = "This note is locked in Apple Notes. The title and metadata were exported, but the body is unavailable until the note is unlocked."
     private static let unreadableMessage = "This note is locked or unreadable in Apple Notes. The available title and metadata were exported, but the body is unavailable until the note is unlocked or readable in Apple Notes."
 
@@ -240,11 +242,37 @@ enum LockedNotePlaceholder {
 
 enum NoteContentFingerprint {
     static func value(for note: NotesNote) -> String {
+        hash(fingerprintComponents(for: note))
+    }
+
+    static func acceptedValues(for note: NotesNote) -> Set<String> {
+        var values = Set([value(for: note)])
+        if !note.appearsLockedOrUnreadable {
+            values.insert(emptyPlaceholderVersionFieldValue(for: note))
+        }
+        return values
+    }
+
+    private static func emptyPlaceholderVersionFieldValue(for note: NotesNote) -> String {
+        var components = legacyFingerprintComponents(for: note)
+        components.append("")
+        return hash(components)
+    }
+
+    private static func fingerprintComponents(for note: NotesNote) -> [String] {
+        var components = legacyFingerprintComponents(for: note)
+        if note.appearsLockedOrUnreadable {
+            components.append(LockedNotePlaceholder.contentFingerprintVersion)
+        }
+        return components
+    }
+
+    private static func legacyFingerprintComponents(for note: NotesNote) -> [String] {
         let attachmentSignature = note.attachments
             .map { "\($0.id)|\($0.typeUTI)|\($0.filename ?? "")" }
             .sorted()
             .joined(separator: "\n")
-        let payload = [
+        return [
             note.id,
             note.identifier ?? "",
             note.sourceFingerprint ?? "",
@@ -254,7 +282,11 @@ enum NoteContentFingerprint {
             note.plaintext,
             attachmentSignature,
             note.isPasswordProtected ? "locked" : "unlocked"
-        ].joined(separator: "\u{1F}")
+        ]
+    }
+
+    private static func hash(_ components: [String]) -> String {
+        let payload = components.joined(separator: "\u{1F}")
         let digest = SHA256.hash(data: Data(payload.utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
     }
@@ -376,13 +408,17 @@ class ExportViewModel: ObservableObject {
             let contentFingerprint: (NotesNote) -> String? = { note in
                 self.noteContentFingerprint(note)
             }
+            let acceptedContentFingerprints: (NotesNote) -> Set<String>? = { note in
+                NoteContentFingerprint.acceptedValues(for: note)
+            }
 
             let notesToExport: [NotesNote]
             if isSync, let manifest = existingManifest {
                 var filteredNotes = manifest.notesNeedingExport(
                     from: exportableNotes,
                     exportFingerprint: exportFingerprint,
-                    contentFingerprint: contentFingerprint
+                    contentFingerprint: contentFingerprint,
+                    acceptedContentFingerprints: acceptedContentFingerprints
                 )
                 let settingsDrivenCount = exportableNotes.countMatchingExportFingerprintChange(
                     manifest: manifest,
