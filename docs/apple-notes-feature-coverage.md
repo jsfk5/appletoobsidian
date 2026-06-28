@@ -28,7 +28,7 @@ The source feature inventory comes from Apple's Notes User Guide for Mac. Apple 
 | Web links | Markdown links | Supported | Link URL/title changes should trigger export | Needs test | Add web-link fixture |
 | Apple Notes note links | Obsidian wikilinks to exported target notes | Supported | Target title/path changes must update links | Needs test | Add renamed/moved linked-note tests |
 | App links and deep links | Markdown links when safe | Unknown | URL changes should trigger export | Not covered | Audit URL schemes and escaping |
-| Photos and images | Exported attachment plus inline Obsidian image embed | Supported | Attachment edits/replacements should trigger export | Partial | Add multiple image formats fixture |
+| Photos and images | Exported attachment plus inline Obsidian image embed | Supported | Attachment edits/replacements should trigger export | Focused HTML-to-Obsidian embed test | Add multiple image formats fixture |
 | Generic file attachments | Exported attachment folder with Markdown link | Partial | Attachment add/remove should trigger export | Needs test | Add file attachment fixture |
 | PDFs | Exported PDF attachment with Markdown link or embed | Partial | PDF replacement/markup should trigger export | Needs test | Add PDF fixture |
 | Scanned documents | Export scan as attachment, ideally PDF/image with useful link | Unknown | Scan add/remove/markup should trigger export | Not covered | Audit local scan representation |

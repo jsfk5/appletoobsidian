@@ -462,6 +462,43 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertFalse(repaired.contains("![[Preventing The ]]"))
     }
 
+    func testProcessedHTMLImageAttachmentBecomesObsidianEmbed() throws {
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(":memory:", &db), SQLITE_OK)
+        defer { sqlite3_close(db) }
+
+        let attachment = NotesAttachment(
+            id: "image-1",
+            typeUTI: "public.jpeg",
+            filename: "9430A7CC-CB05-4DFC-8A58-DAB90C8F24B0.jpg"
+        )
+        let attachmentPath = "Preventing The 'Bad' Plateau - The Frauenfeld Clinic (Attachments)/9430A7CC-CB05-4DFC-8A58-DAB90C8F24B0.jpg"
+        let rawHTML = #"<html><body><p>Before</p><img src="Preventing The" alt="Preventing The"><p>After</p></body></html>"#
+
+        let processedHTML = HTMLAttachmentProcessor(database: db!).processHTML(
+            html: rawHTML,
+            attachments: [attachment],
+            attachmentPaths: ["image-1": attachmentPath],
+            embedImages: false,
+            linkEmbeddedImages: false
+        )
+        let note = makeNote(
+            title: "Preventing The 'Bad' Plateau - The Frauenfeld Clinic",
+            htmlBody: processedHTML,
+            attachments: [attachment]
+        )
+        let markdown = note.toMarkdown(flavor: .obsidian)
+        let repairedMarkdown = MarkdownAttachmentRepair.repairBareObsidianImageEmbeds(
+            in: markdown,
+            attachments: [attachment],
+            attachmentPaths: ["image-1": attachmentPath]
+        )
+
+        XCTAssertTrue(repairedMarkdown.contains("![[\(attachmentPath)]]"))
+        XCTAssertFalse(repairedMarkdown.contains("![[Preventing The]]"))
+        XCTAssertFalse(repairedMarkdown.contains(#"src="Preventing The""#))
+    }
+
     private func makeNote(
         id: String = "note-1",
         identifier: String? = nil,
