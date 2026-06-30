@@ -26,7 +26,7 @@ The source feature inventory comes from Apple's Notes User Guide for Mac. Apple 
 | Checklists | Markdown task list syntax with checked/unchecked state | Unknown | Reordering/checking should trigger export | Not covered | Add checklist fixture and sync test |
 | Tables | Markdown table or safe HTML table | Partial | Cell edits should trigger export | Needs test | Add multiline and linked-cell table fixtures |
 | Web links | Markdown links | Supported | Link URL/title changes should trigger export | Needs test | Add web-link fixture |
-| Apple Notes note links | Obsidian wikilinks to exported target notes | Supported | Target title/path changes must update links | Needs test | Add renamed/moved linked-note tests |
+| Apple Notes note links | Obsidian wikilinks to exported target notes | Supported | Target title/path changes must update links | Focused Obsidian wikilink tests | Add renamed/moved export-plan fixture |
 | App links and deep links | Markdown links when safe | Unknown | URL changes should trigger export | Not covered | Audit URL schemes and escaping |
 | Photos and images | Exported attachment plus inline Obsidian image embed | Supported | Attachment edits/replacements should trigger export | Focused HTML-to-Obsidian embed test | Add multiple image formats fixture |
 | Generic file attachments | Exported attachment folder with Markdown link | Partial | Attachment add/remove should trigger export | Needs test | Add file attachment fixture |

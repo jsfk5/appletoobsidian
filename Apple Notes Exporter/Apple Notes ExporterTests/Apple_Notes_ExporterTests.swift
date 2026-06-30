@@ -499,6 +499,52 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertFalse(repairedMarkdown.contains(#"src="Preventing The""#))
     }
 
+    func testAppleNotesLinkBecomesObsidianWikilink() throws {
+        let target = NoteLinkTarget(
+            markdownPath: "../Tech/Review Preview - The Frauenfeld Clinic.md",
+            obsidianReference: "iCloud/Tech/Review Preview - The Frauenfeld Clinic",
+            title: "Review Preview - The Frauenfeld Clinic"
+        )
+        let note = makeNote(
+            htmlBody: """
+            <html><body>
+            <p>See <a href="applenotes://note/TARGET-NOTE-ID">Review Preview - The Frauenfeld Clinic</a>.</p>
+            </body></html>
+            """
+        )
+
+        let markdown = note.toMarkdown(
+            flavor: .obsidian,
+            noteLinkTargets: ["TARGET-NOTE-ID": target]
+        )
+
+        XCTAssertTrue(markdown.contains("[[iCloud/Tech/Review Preview - The Frauenfeld Clinic|Review Preview - The Frauenfeld Clinic]]"))
+        XCTAssertFalse(markdown.contains("applenotes://note/TARGET-NOTE-ID"))
+    }
+
+    func testAppleNotesQueryIdentifierLinkUsesObsidianAlias() throws {
+        let target = NoteLinkTarget(
+            markdownPath: "../EndMyopia/Preventing The Bad Plateau.md",
+            obsidianReference: "iCloud/EndMyopia/Preventing The Bad Plateau",
+            title: "Preventing The Bad Plateau"
+        )
+        let note = makeNote(
+            htmlBody: """
+            <html><body>
+            <p>Source: <a href="applenotes://show?identifier=x-coredata://ABCDEF-123456">plateau note</a></p>
+            </body></html>
+            """
+        )
+
+        let markdown = note.toMarkdown(
+            flavor: .obsidian,
+            noteLinkTargets: ["x-coredata://ABCDEF-123456": target]
+        )
+
+        XCTAssertTrue(markdown.contains("[[iCloud/EndMyopia/Preventing The Bad Plateau|plateau note]]"))
+        XCTAssertFalse(markdown.contains("applenotes://show?identifier=x-coredata://ABCDEF-123456"))
+    }
+
     private func makeNote(
         id: String = "note-1",
         identifier: String? = nil,
