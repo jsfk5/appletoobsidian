@@ -23,7 +23,7 @@ The source feature inventory comes from Apple's Notes User Guide for Mac. Apple 
 | Collapsible sections | Preserve heading/content text; represent collapsed state if possible | Unknown | Content changes should trigger export | Not covered | Research local representation |
 | Bulleted lists | Markdown list syntax | Partial | Content changes should trigger export | Needs test | Add nested bullet fixture |
 | Numbered lists | Markdown ordered list syntax | Partial | Content changes should trigger export | Needs test | Add nested numbered-list fixture |
-| Checklists | Markdown task list syntax with checked/unchecked state | Unknown | Reordering/checking should trigger export | Not covered | Add checklist fixture and sync test |
+| Checklists | Markdown task list syntax with checked/unchecked state | Partial | Reordering/checking should trigger export | Focused state-preservation test | Convert visible checkbox state to task-list syntax |
 | Tables | Markdown table or safe HTML table | Partial | Cell edits should trigger export | Needs test | Add multiline and linked-cell table fixtures |
 | Web links | Markdown links | Supported | Link URL/title changes should trigger export | Needs test | Add web-link fixture |
 | Apple Notes note links | Obsidian wikilinks to exported target notes | Supported | Target title/path changes must update links | Focused Obsidian wikilink tests | Add renamed/moved export-plan fixture |

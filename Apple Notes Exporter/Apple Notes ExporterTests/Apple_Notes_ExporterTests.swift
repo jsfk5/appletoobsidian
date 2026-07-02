@@ -545,6 +545,24 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertFalse(markdown.contains("applenotes://show?identifier=x-coredata://ABCDEF-123456"))
     }
 
+    func testAppleNotesChecklistStateIsPreservedInMarkdown() throws {
+        let note = makeNote(
+            htmlBody: """
+            <html><body>
+            <ul style='list-style-type: none;'>
+            <li data-indent='0' data-list-type='103'>☑ Export locked notes cleanly</li>
+            <li data-indent='0' data-list-type='103'>☐ Add task-list syntax later</li>
+            </ul>
+            </body></html>
+            """
+        )
+
+        let markdown = note.toMarkdown(flavor: .obsidian)
+
+        XCTAssertTrue(markdown.contains("- ☑ Export locked notes cleanly"))
+        XCTAssertTrue(markdown.contains("- ☐ Add task-list syntax later"))
+    }
+
     private func makeNote(
         id: String = "note-1",
         identifier: String? = nil,
