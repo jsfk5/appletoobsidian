@@ -29,8 +29,8 @@ The source feature inventory comes from Apple's Notes User Guide for Mac. Apple 
 | Apple Notes note links | Obsidian wikilinks to exported target notes | Supported | Target title/path changes must update links | Focused Obsidian wikilink tests | Add renamed/moved export-plan fixture |
 | App links and deep links | Markdown links when safe | Unknown | URL changes should trigger export | Not covered | Audit URL schemes and escaping |
 | Photos and images | Exported attachment plus inline Obsidian image embed | Supported | Attachment edits/replacements should trigger export | Focused HTML-to-Obsidian embed test | Add multiple image formats fixture |
-| Generic file attachments | Exported attachment folder with Markdown link | Partial | Attachment add/remove should trigger export | Needs test | Add file attachment fixture |
-| PDFs | Exported PDF attachment with Markdown link or embed | Partial | PDF replacement/markup should trigger export | Needs test | Add PDF fixture |
+| Generic file attachments | Exported attachment folder with Markdown link | Partial | Attachment add/remove should trigger export | Focused Markdown link test | Add replacement/removal fixture |
+| PDFs | Exported PDF attachment with Markdown link or embed | Partial | PDF replacement/markup should trigger export | Focused Markdown link test | Add PDF replacement/markup fixture |
 | Scanned documents | Export scan as attachment, ideally PDF/image with useful link | Unknown | Scan add/remove/markup should trigger export | Not covered | Audit local scan representation |
 | Drawings | Export drawing image/file with useful Markdown reference | Partial | Drawing edits should trigger export | Needs test | Add drawing fixture |
 | Marked-up attachments | Export latest attachment state | Unknown | Markup edits should trigger export | Not covered | Audit whether modified file path changes |

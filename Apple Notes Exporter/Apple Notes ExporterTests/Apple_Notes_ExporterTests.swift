@@ -499,6 +499,72 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertFalse(repairedMarkdown.contains(#"src="Preventing The""#))
     }
 
+    func testProcessedPDFAttachmentBecomesMarkdownLink() throws {
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(":memory:", &db), SQLITE_OK)
+        defer { sqlite3_close(db) }
+
+        let attachment = NotesAttachment(
+            id: "pdf-1",
+            typeUTI: "public.pdf",
+            filename: "Vision Plan.pdf"
+        )
+        let attachmentPath = "Research Note (Attachments)/Vision Plan.pdf"
+        let rawHTML = #"""
+        <html><body>
+        <p>Review this:</p>
+        <span data-attachment-id="pdf-1" data-attachment-type="public.pdf">￼</span>
+        </body></html>
+        """#
+
+        let processedHTML = HTMLAttachmentProcessor(database: db!).processHTML(
+            html: rawHTML,
+            attachments: [attachment],
+            attachmentPaths: ["pdf-1": attachmentPath],
+            embedImages: false,
+            linkEmbeddedImages: false
+        )
+        let note = makeNote(htmlBody: processedHTML, attachments: [attachment])
+        let markdown = note.toMarkdown(flavor: .obsidian)
+
+        XCTAssertTrue(markdown.contains("[Vision Plan.pdf](\(attachmentPath))"))
+        XCTAssertFalse(markdown.contains("data-attachment-id"))
+        XCTAssertFalse(markdown.contains("[PDF:"))
+    }
+
+    func testProcessedGenericFileAttachmentBecomesMarkdownLink() throws {
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(":memory:", &db), SQLITE_OK)
+        defer { sqlite3_close(db) }
+
+        let attachment = NotesAttachment(
+            id: "file-1",
+            typeUTI: "public.zip-archive",
+            filename: "Course Materials.zip"
+        )
+        let attachmentPath = "Research Note (Attachments)/Course Materials.zip"
+        let rawHTML = #"""
+        <html><body>
+        <p>Archive:</p>
+        <span data-attachment-id="file-1" data-attachment-type="public.zip-archive">￼</span>
+        </body></html>
+        """#
+
+        let processedHTML = HTMLAttachmentProcessor(database: db!).processHTML(
+            html: rawHTML,
+            attachments: [attachment],
+            attachmentPaths: ["file-1": attachmentPath],
+            embedImages: false,
+            linkEmbeddedImages: false
+        )
+        let note = makeNote(htmlBody: processedHTML, attachments: [attachment])
+        let markdown = note.toMarkdown(flavor: .obsidian)
+
+        XCTAssertTrue(markdown.contains("[Course Materials.zip](\(attachmentPath))"))
+        XCTAssertFalse(markdown.contains("data-attachment-id"))
+        XCTAssertFalse(markdown.contains("[Attachment:"))
+    }
+
     func testAppleNotesLinkBecomesObsidianWikilink() throws {
         let target = NoteLinkTarget(
             markdownPath: "../Tech/Review Preview - The Frauenfeld Clinic.md",
