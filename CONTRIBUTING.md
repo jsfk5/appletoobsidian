@@ -9,6 +9,7 @@ The app bundle and Xcode scheme are still named `Apple Notes Exporter` while the
 ## Before You Start
 
 - Read [README.md](README.md), [PRIVACY.md](PRIVACY.md), [SECURITY.md](SECURITY.md), and [docs/apple-notes-feature-coverage.md](docs/apple-notes-feature-coverage.md).
+- Read [Local Builds and Full Disk Access](docs/local-builds-full-disk-access.md) before replacing a local app bundle or validating Notes database access.
 - Use synthetic notes or redacted test data whenever possible.
 - Do not test destructive sync behavior against an important vault without a backup.
 - Keep changes small and focused.

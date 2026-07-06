@@ -97,6 +97,8 @@ macOS protects the Apple Notes database. If the app reports zero notes or fails 
 
 If you replace the app in `/Applications`, macOS may require you to remove and re-add the new bundle.
 
+See [Local Builds and Full Disk Access](docs/local-builds-full-disk-access.md) for local build replacement guidance, build-number checks, signing notes, and when a docs/test-only change does not require replacing the installed app.
+
 ## Automation
 
 For nightly syncs, prefer running the built app or a wrapper script directly from a LaunchAgent. Do not automate the GUI with coordinate-based click tools; the app state and window position are too easy to break.
