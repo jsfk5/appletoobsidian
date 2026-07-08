@@ -39,7 +39,7 @@ Compared with the upstream Apple Notes Exporter base, this fork adds and/or tune
 - More visible permission guidance when macOS Full Disk Access blocks the Notes database.
 - Regression coverage for Obsidian link conversion, path normalization, sync cleanup, and move-sensitive fingerprints.
 
-See [Apple Notes Feature Coverage](docs/apple-notes-feature-coverage.md) for the public compatibility matrix, sync concerns, and test priorities.
+See [Apple Notes Feature Coverage](docs/apple-notes-feature-coverage.md) for the public compatibility matrix, sync concerns, and test priorities. See [Checklist Task List Syntax Design](docs/checklist-task-list-design.md) for the scoped plan to convert Apple Notes checklist state into Obsidian-native task-list syntax.
 
 ## Sync behavior
 
