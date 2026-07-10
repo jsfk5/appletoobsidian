@@ -39,7 +39,7 @@ Compared with the upstream Apple Notes Exporter base, this fork adds and/or tune
 - More visible permission guidance when macOS Full Disk Access blocks the Notes database.
 - Regression coverage for Obsidian link conversion, path normalization, sync cleanup, and move-sensitive fingerprints.
 
-See [Apple Notes Feature Coverage](docs/apple-notes-feature-coverage.md) for the public compatibility matrix, sync concerns, and test priorities. See [Checklist Task List Syntax Design](docs/checklist-task-list-design.md) for the scoped plan to convert Apple Notes checklist state into Obsidian-native task-list syntax.
+See [Apple Notes Feature Coverage](docs/apple-notes-feature-coverage.md) for the public compatibility matrix, sync concerns, and test priorities. See [Checklist Task List Syntax Design](docs/checklist-task-list-design.md) for the scoped plan to convert Apple Notes checklist state into Obsidian-native task-list syntax. See [Selective Upstream Adoption Strategy](docs/selective-upstream-adoption.md) for how useful upstream work is reviewed without making upstream's broader roadmap this project's roadmap.
 
 ## Sync behavior
 
@@ -115,6 +115,8 @@ This fork starts from [Apple Notes Exporter](https://github.com/kzaremski/apple-
 
 Upstream work, contributors, and research remain credited. Useful fixes here may be suitable for upstream pull requests where they also help the broader exporter.
 
+Apple to Obsidian does not merge every upstream release automatically. Useful fixes are reviewed and adopted in small, tested slices while the working sync behavior remains the compatibility baseline. See [Selective Upstream Adoption Strategy](docs/selective-upstream-adoption.md).
+
 ## Open source maintenance focus
 
 This repository is being published as an active GPL-3.0 fork with a concrete maintainer workflow:
@@ -127,7 +129,9 @@ This repository is being published as an active GPL-3.0 fork with a concrete mai
 
 ## Roadmap
 
-- Rename the app bundle and UI from Apple Notes Exporter to Apple to Obsidian.
+- Design an Apple to Obsidian-specific UI and setup experience rather than inheriting the upstream product direction.
+- Rename the app bundle and UI from Apple Notes Exporter to Apple to Obsidian when signing, permissions, and automation migration are ready.
+- Selectively adopt upstream database, attachment, security, testing, and CLI improvements that strengthen the focused workflow.
 - Add a dedicated command-line sync command with explicit output arguments.
 - Add release packaging and notarization for public downloads.
 - Add a safer first-run setup flow for Obsidian vault selection.
