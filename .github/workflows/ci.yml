@@ -27,7 +27,6 @@ jobs:
     timeout-minutes: 30
     env:
       DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
-      DERIVED_DATA: ${{ runner.temp }}/apple-notes-exporter-deriveddata
 
     steps:
       - name: Check out repository
@@ -44,7 +43,7 @@ jobs:
           xcodebuild \
             -project "Apple Notes Exporter/Apple Notes Exporter.xcodeproj" \
             -scheme "Apple Notes Exporter" \
-            -derivedDataPath "$DERIVED_DATA" \
+            -derivedDataPath "$RUNNER_TEMP/apple-notes-exporter-deriveddata" \
             -resolvePackageDependencies
 
       - name: Compile app and test bundles without signing
@@ -54,7 +53,7 @@ jobs:
             -scheme "Apple Notes Exporter" \
             -configuration Debug \
             -destination "platform=macOS" \
-            -derivedDataPath "$DERIVED_DATA" \
+            -derivedDataPath "$RUNNER_TEMP/apple-notes-exporter-deriveddata" \
             -disableAutomaticPackageResolution \
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
@@ -63,8 +62,8 @@ jobs:
 
       - name: Verify compiled products
         run: |
-          test -d "$DERIVED_DATA/Build/Products/Debug/Apple Notes Exporter.app"
-          test -d "$DERIVED_DATA/Build/Products/Debug/Apple Notes Exporter.app/Contents/PlugIns/Apple Notes ExporterTests.xctest"
+          test -d "$RUNNER_TEMP/apple-notes-exporter-deriveddata/Build/Products/Debug/Apple Notes Exporter.app"
+          test -d "$RUNNER_TEMP/apple-notes-exporter-deriveddata/Build/Products/Debug/Apple Notes Exporter.app/Contents/PlugIns/Apple Notes ExporterTests.xctest"
 
       - name: Confirm build did not modify tracked files
         run: git diff --exit-code
