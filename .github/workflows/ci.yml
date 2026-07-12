@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "screenshots/**"
+  pull_request:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "screenshots/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compile:
+    name: Unsigned app and test compile
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_16.4.app/Contents/Developer
+      DERIVED_DATA: ${{ runner.temp }}/apple-notes-exporter-deriveddata
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          swift --version
+
+      - name: Resolve Swift packages
+        run: |
+          xcodebuild \
+            -project "Apple Notes Exporter/Apple Notes Exporter.xcodeproj" \
+            -scheme "Apple Notes Exporter" \
+            -derivedDataPath "$DERIVED_DATA" \
+            -resolvePackageDependencies
+
+      - name: Compile app and test bundles without signing
+        run: |
+          xcodebuild \
+            -project "Apple Notes Exporter/Apple Notes Exporter.xcodeproj" \
+            -scheme "Apple Notes Exporter" \
+            -configuration Debug \
+            -destination "platform=macOS" \
+            -derivedDataPath "$DERIVED_DATA" \
+            -disableAutomaticPackageResolution \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            build-for-testing
+
+      - name: Verify compiled products
+        run: |
+          test -d "$DERIVED_DATA/Build/Products/Debug/Apple Notes Exporter.app"
+          test -d "$DERIVED_DATA/Build/Products/Debug/Apple Notes Exporter.app/Contents/PlugIns/Apple Notes ExporterTests.xctest"
+
+      - name: Confirm build did not modify tracked files
+        run: git diff --exit-code

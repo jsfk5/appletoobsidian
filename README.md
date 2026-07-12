@@ -3,6 +3,7 @@
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 [![macOS 11.0+](https://img.shields.io/badge/macOS-11.0%2B-brightgreen.svg)](https://www.apple.com/macos/)
 [![Swift](https://img.shields.io/badge/Swift-5-orange.svg)](https://swift.org/)
+[![CI](https://github.com/jsfk5/appletoobsidian/actions/workflows/ci.yml/badge.svg)](https://github.com/jsfk5/appletoobsidian/actions/workflows/ci.yml)
 [![Last Commit](https://img.shields.io/github/last-commit/jsfk5/appletoobsidian)](https://github.com/jsfk5/appletoobsidian/commits/main)
 
 Apple to Obsidian is a macOS app for exporting and continuously syncing Apple Notes into an Obsidian vault as Markdown, with folder structure, attachments, inline images, and Apple Notes note links preserved in an Obsidian-friendly form.

@@ -135,6 +135,8 @@ Do not attach private notes, databases, full vaults, or unredacted screenshots t
 
 Docs-only PRs do not need an app build, but they should still pass `git diff --check` and the sensitive-data check.
 
+Public CI compiles the app and test bundles without code signing. It does not launch the app, access the local Apple Notes database, run an export, or replace full manual validation for runtime sync changes.
+
 ## Commit Messages
 
 Use Conventional Commits:
