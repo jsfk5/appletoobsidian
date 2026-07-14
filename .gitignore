@@ -41,6 +41,8 @@ build/
 .DS_Store
 *.xcuserstate
 xcuserdata/
+*.pbxproj.backup
+*.pbxproj.bak*
 DerivedData/
 *.xcresult
 *.profraw
