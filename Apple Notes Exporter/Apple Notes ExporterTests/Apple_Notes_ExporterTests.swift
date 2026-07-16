@@ -629,6 +629,156 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertTrue(markdown.contains("- ☐ Add task-list syntax later"))
     }
 
+    func testOrderedListNumbersItemsInSourceOrder() throws {
+        let note = makeNote(
+            htmlBody: """
+            <html><body>
+            <ol>
+            <li data-indent='0' data-list-type='102'>First</li>
+            <li data-indent='0' data-list-type='102'>Second</li>
+            <li data-indent='0' data-list-type='102'>Third</li>
+            </ol>
+            </body></html>
+            """
+        )
+
+        let markdown = note.toMarkdown(flavor: .obsidian)
+
+        XCTAssertEqual(listLines(in: markdown), ["1. First", "2. Second", "3. Third"])
+    }
+
+    func testNestedOrderedListsUseIndependentCounters() throws {
+        let note = makeNote(
+            htmlBody: """
+            <html><body>
+            <ol>
+            <li data-indent='0' data-list-type='102'>First parent</li>
+            <li data-indent='1' data-list-type='102'>First child</li>
+            <li data-indent='1' data-list-type='102'>Second child</li>
+            <li data-indent='0' data-list-type='102'>Second parent</li>
+            <li data-indent='1' data-list-type='102'>New first child</li>
+            </ol>
+            </body></html>
+            """
+        )
+
+        let markdown = note.toMarkdown(flavor: .obsidian)
+
+        XCTAssertEqual(
+            listLines(in: markdown),
+            [
+                "1. First parent",
+                "    1. First child",
+                "    2. Second child",
+                "2. Second parent",
+                "    1. New first child"
+            ]
+        )
+    }
+
+    func testSeparateOrderedListsRestartAtOne() throws {
+        let note = makeNote(
+            htmlBody: """
+            <html><body>
+            <ol>
+            <li data-indent='0' data-list-type='102'>First list item</li>
+            <li data-indent='0' data-list-type='102'>Second list item</li>
+            </ol>
+            Between lists<br>
+            <ol>
+            <li data-indent='0' data-list-type='102'>Restarted list item</li>
+            </ol>
+            </body></html>
+            """
+        )
+
+        let markdown = note.toMarkdown(flavor: .obsidian)
+
+        XCTAssertEqual(
+            listLines(in: markdown),
+            ["1. First list item", "2. Second list item", "1. Restarted list item"]
+        )
+        XCTAssertTrue(markdown.contains("Between lists"))
+    }
+
+    func testOrderedListPreservesInlineFormattingAndLinks() throws {
+        let note = makeNote(
+            htmlBody: """
+            <html><body>
+            <ol>
+            <li data-indent='0' data-list-type='102'>Read the <strong>guide</strong> at <a href='https://example.com'>example</a></li>
+            </ol>
+            </body></html>
+            """
+        )
+
+        let markdown = note.toMarkdown(flavor: .obsidian)
+
+        XCTAssertEqual(
+            listLines(in: markdown),
+            ["1. Read the **guide** at [example](https://example.com)"]
+        )
+    }
+
+    func testIndentedBulletListPreservesMarkersAndNesting() throws {
+        let note = makeNote(
+            htmlBody: """
+            <html><body>
+            <ul>
+            <li data-indent='0' data-list-type='100'>Parent bullet</li>
+            <li data-indent='1' data-list-type='100'>Child bullet</li>
+            <li data-indent='0' data-list-type='100'>Second parent bullet</li>
+            </ul>
+            </body></html>
+            """
+        )
+
+        let markdown = note.toMarkdown(flavor: .obsidian)
+
+        XCTAssertEqual(
+            listLines(in: markdown),
+            ["- Parent bullet", "    - Child bullet", "- Second parent bullet"]
+        )
+    }
+
+    func testNestedListTypeChangeDoesNotResetParentCounter() throws {
+        let note = makeNote(
+            htmlBody: """
+            <html><body>
+            <ol>
+            <li data-indent='0' data-list-type='102'>First parent</li>
+            <ol>
+            <li data-indent='1' data-list-type='102'>Numbered child</li>
+            </ol>
+            <ul>
+            <li data-indent='1' data-list-type='100'>Bullet child</li>
+            </ul>
+            <li data-indent='0' data-list-type='102'>Second parent</li>
+            </ol>
+            </body></html>
+            """
+        )
+
+        let markdown = note.toMarkdown(flavor: .obsidian)
+
+        XCTAssertEqual(
+            listLines(in: markdown),
+            [
+                "1. First parent",
+                "    1. Numbered child",
+                "    - Bullet child",
+                "2. Second parent"
+            ]
+        )
+    }
+
+    private func listLines(in markdown: String) -> [String] {
+        markdown.components(separatedBy: .newlines).filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.range(of: #"^(?:-|\d+\.)\s"#, options: .regularExpression) != nil
+        }
+    }
+
     private func makeNote(
         id: String = "note-1",
         identifier: String? = nil,

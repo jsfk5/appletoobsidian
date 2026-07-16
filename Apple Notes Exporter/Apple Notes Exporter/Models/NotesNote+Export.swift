@@ -459,12 +459,11 @@ private struct HTMLToMarkdownConverter {
             return nil
         }
 
-        var result = html
         var orderedCounters: [Int: Int] = [:]
+        var replacements: [(range: NSRange, line: String)] = []
 
-        for match in matches.reversed() {
+        for (index, match) in matches.enumerated() {
             guard
-                let fullRange = Range(match.range(at: 0), in: result),
                 let attributesRange = Range(match.range(at: 1), in: html),
                 let contentRange = Range(match.range(at: 2), in: html)
             else {
@@ -476,6 +475,18 @@ private struct HTMLToMarkdownConverter {
             let indentLevel = listAttributeInt(named: "data-indent", in: attributes) ?? 0
             let listType = listAttributeInt(named: "data-list-type", in: attributes) ?? 100
             let indent = String(repeating: "    ", count: max(0, indentLevel))
+
+            if index > 0 {
+                let previousRange = matches[index - 1].range(at: 0)
+                let gapLocation = NSMaxRange(previousRange)
+                let gapLength = match.range(at: 0).location - gapLocation
+                if gapLength > 0 {
+                    let gap = nsString.substring(with: NSRange(location: gapLocation, length: gapLength))
+                    if containsListBoundary(gap) {
+                        orderedCounters = orderedCounters.filter { $0.key < indentLevel }
+                    }
+                }
+            }
 
             orderedCounters = orderedCounters.filter { $0.key <= indentLevel }
 
@@ -495,12 +506,34 @@ private struct HTMLToMarkdownConverter {
                 noteLinkTargets: noteLinkTargets
             )
             let line = text.isEmpty ? "\(indent)\(marker)" : "\(indent)\(marker) \(text)"
-            result.replaceSubrange(fullRange, with: "\(line)\n")
+            replacements.append((match.range(at: 0), line))
+        }
+
+        var result = html
+        for replacement in replacements.reversed() {
+            guard let fullRange = Range(replacement.range, in: result) else {
+                continue
+            }
+            result.replaceSubrange(fullRange, with: "\(replacement.line)\n")
         }
 
         result = result.replacingOccurrences(of: #"</?(ul|ol)\b[^>]*>"#, with: "", options: .regularExpression)
         result = result.replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
         return result
+    }
+
+    private static func containsListBoundary(_ html: String) -> Bool {
+        guard let closingRange = html.range(
+            of: #"</(?:ul|ol)\b[^>]*>"#,
+            options: [.caseInsensitive, .regularExpression]
+        ) else {
+            return false
+        }
+
+        return html[closingRange.upperBound...].range(
+            of: #"<(?:ul|ol)\b[^>]*>"#,
+            options: [.caseInsensitive, .regularExpression]
+        ) != nil
     }
 
     private static func listAttributeInt(named name: String, in html: String) -> Int? {
