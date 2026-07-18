@@ -22,12 +22,12 @@ The source feature inventory comes from Apple's Notes User Guide for Mac. Apple 
 | Highlights and text color | Preserve useful styling or degrade predictably | Unknown | Content changes should trigger export | Not covered | Audit Apple Notes HTML output |
 | Collapsible sections | Preserve heading/content text; represent collapsed state if possible | Unknown | Content changes should trigger export | Not covered | Research local representation |
 | Bulleted lists | Markdown list syntax | Partial | Content changes should trigger export | Needs test | Add nested bullet fixture |
-| Numbered lists | Markdown ordered list syntax | Partial | Content changes should trigger export | Needs test | Add nested numbered-list fixture |
+| Numbered lists | Markdown ordered list syntax with source-order and nested counters | Corrected on selective branch | Content changes should trigger export | Focused source-order, nesting, reset, formatting, and type-boundary tests | Complete renderer migration gate before release |
 | Checklists | Markdown task list syntax with checked/unchecked state | Partial | Reordering/checking should trigger export | Focused state-preservation test + scoped design | Implement [checklist task-list conversion](checklist-task-list-design.md) |
 | Tables | Markdown table or safe HTML table | Partial | Cell edits should trigger export | Needs test | Add multiline and linked-cell table fixtures |
-| Web links | Markdown links | Supported | Link URL/title changes should trigger export | Needs test | Add web-link fixture |
+| Web links | Markdown links with escaped href values and blocked active-content schemes | Supported on selective branch | Link URL/title changes should trigger export | Focused HTML generator and safe-scheme tests | Add rendered Markdown destination fixture |
 | Apple Notes note links | Obsidian wikilinks to exported target notes | Supported | Target title/path changes must update links | Focused Obsidian wikilink tests | Add renamed/moved export-plan fixture |
-| App links and deep links | Markdown links when safe | Unknown | URL changes should trigger export | Not covered | Audit URL schemes and escaping |
+| App links and deep links | Preserve supported web/contact and Apple Notes links; block unknown or active-content schemes | Partial on selective branch | URL changes should trigger export | Focused allowlist/blocklist tests | Audit additional Apple link schemes before expanding the allowlist |
 | Photos and images | Exported attachment plus inline Obsidian image embed | Supported | Attachment edits/replacements should trigger export | Focused HTML-to-Obsidian embed test | Add multiple image formats fixture |
 | Generic file attachments | Exported attachment folder with Markdown link | Partial | Attachment add/remove should trigger export | Focused Markdown link test | Add replacement/removal fixture |
 | PDFs | Exported PDF attachment with Markdown link or embed | Partial | PDF replacement/markup should trigger export | Focused Markdown link test | Add PDF replacement/markup fixture |

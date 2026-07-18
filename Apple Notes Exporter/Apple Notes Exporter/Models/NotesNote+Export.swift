@@ -924,8 +924,8 @@ private struct HTMLToMarkdownConverter {
     private static func decodeHTMLEntities(_ text: String) -> String {
         var result = text
         result = result.replacingOccurrences(of: "&amp;", with: "&")
-        result = result.replacingOccurrences(of: "&lt;", with: "<")
-        result = result.replacingOccurrences(of: "&gt;", with: ">")
+        // Keep angle brackets encoded so literal note text cannot become HTML
+        // and then be stripped by the final Markdown cleanup pass.
         result = result.replacingOccurrences(of: "&quot;", with: "\"")
         result = result.replacingOccurrences(of: "&#39;", with: "'")
         result = result.replacingOccurrences(of: "&apos;", with: "'")

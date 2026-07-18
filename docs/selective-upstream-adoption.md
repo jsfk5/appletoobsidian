@@ -79,6 +79,8 @@ Before a runtime adoption reaches the stable app path, it must preserve or prove
 
 Runtime candidates should first use synthetic notes and a temporary export root. Replacing an installed app, changing its bundle identity, or migrating scheduled automation happens only after those gates pass.
 
+Renderer corrections also need an explicit migration path for already-exported notes. The project must not hide a global refresh inside a normal incremental run. See [Markdown Renderer Migration Design](markdown-renderer-migration-design.md) for the proposed opt-in manifest and user-control contract.
+
 ## UI And Product Direction
 
 The current app bundle and much of the interface still reflect Apple Notes Exporter. That is transitional. Apple to Obsidian will eventually have its own UI and UX centered on Obsidian vault selection, sync status, safe cleanup previews, attachment diagnostics, locked-note reporting, and scheduled operation.

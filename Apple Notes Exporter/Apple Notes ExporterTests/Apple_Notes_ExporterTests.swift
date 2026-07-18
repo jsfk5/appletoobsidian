@@ -611,6 +611,135 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertFalse(markdown.contains("applenotes://show?identifier=x-coredata://ABCDEF-123456"))
     }
 
+    func testNoteHTMLGeneratorEscapesLiteralHTMLText() throws {
+        let text = #"<b>literal</b> & "quotes" 'single'"#
+        let html = generatedHTML(text: text, runs: [attributeRun(for: text)])
+
+        XCTAssertTrue(html.contains("&lt;b&gt;literal&lt;/b&gt; &amp; &quot;quotes&quot; &#39;single&#39;"))
+        XCTAssertFalse(html.contains("<b>literal</b>"))
+    }
+
+    func testNoteHTMLGeneratorEscapesLiteralHTMLInsideListItems() throws {
+        let text = #"<script>alert("not markup")</script>"#
+        var style = ParagraphStyle()
+        style.styleType = 102
+        style.indentAmount = 0
+        let html = generatedHTML(
+            text: text,
+            runs: [attributeRun(for: text, paragraphStyle: style)]
+        )
+
+        XCTAssertTrue(html.contains("&lt;script&gt;alert(&quot;not markup&quot;)&lt;/script&gt;"))
+        XCTAssertFalse(html.contains("<script>"))
+    }
+
+    func testEscapedListTextSurvivesObsidianMarkdownConversion() throws {
+        let text = #"<script>alert("not markup")</script>"#
+        var style = ParagraphStyle()
+        style.styleType = 102
+        style.indentAmount = 0
+        let html = generatedHTML(
+            text: text,
+            runs: [attributeRun(for: text, paragraphStyle: style)]
+        )
+        let markdown = makeNote(htmlBody: html).toMarkdown(flavor: .obsidian)
+
+        XCTAssertTrue(markdown.contains(#"1. &lt;script&gt;alert("not markup")&lt;/script&gt;"#))
+        XCTAssertFalse(markdown.contains("<script>"))
+    }
+
+    func testNoteHTMLGeneratorEscapesAllowedLinkHref() throws {
+        let text = "Search"
+        let href = " HTTPS://example.com/search?q=a&label='quoted' "
+        let html = generatedHTML(
+            text: text,
+            runs: [attributeRun(for: text, link: href)]
+        )
+
+        XCTAssertTrue(html.contains("href='HTTPS://example.com/search?q=a&amp;label=&#39;quoted&#39;'"))
+        XCTAssertFalse(html.contains("href=' HTTPS://"))
+    }
+
+    func testNoteHTMLGeneratorAllowsSupportedLinkSchemes() throws {
+        let supportedLinks = [
+            "http://example.com",
+            "https://example.com",
+            "mailto:person@example.com",
+            "applenotes://note/NOTE-ID",
+            "tel:+15555550123",
+            "sms:+15555550123",
+            "ftp://example.com/file.txt"
+        ]
+
+        for href in supportedLinks {
+            let text = "Supported link"
+            let html = generatedHTML(
+                text: text,
+                runs: [attributeRun(for: text, link: href)]
+            )
+
+            XCTAssertTrue(html.contains("href='\(href)'"), "Expected allowed href for \(href)")
+        }
+    }
+
+    func testNoteHTMLGeneratorBlocksUnsafeLinkSchemes() throws {
+        let unsafeLinks = [
+            "javascript:alert(1)",
+            " data:text/html,<script>alert(1)</script> ",
+            "vbscript:msgbox(1)",
+            "file:///tmp/private"
+        ]
+
+        for href in unsafeLinks {
+            let text = "Unsafe link"
+            let html = generatedHTML(
+                text: text,
+                runs: [attributeRun(for: text, link: href)]
+            )
+
+            XCTAssertTrue(html.contains("href='#'"), "Expected blocked href for \(href)")
+            XCTAssertFalse(html.lowercased().contains("href='javascript:"))
+            XCTAssertFalse(html.lowercased().contains("href='data:"))
+            XCTAssertFalse(html.lowercased().contains("href='vbscript:"))
+            XCTAssertFalse(html.lowercased().contains("href='file:"))
+        }
+    }
+
+    func testBlockedLinkProducesInertObsidianMarkdownDestination() throws {
+        let text = "Unsafe link"
+        let html = generatedHTML(
+            text: text,
+            runs: [attributeRun(for: text, link: "javascript:alert(1)")]
+        )
+        let markdown = makeNote(htmlBody: html).toMarkdown(flavor: .obsidian)
+
+        XCTAssertTrue(markdown.contains("[Unsafe link](#)"))
+        XCTAssertFalse(markdown.lowercased().contains("javascript:"))
+    }
+
+    func testSanitizedAppleNotesLinkStillBecomesObsidianWikilink() throws {
+        let text = "Plateau note"
+        let href = "applenotes://show?identifier=x-coredata://ABCDEF-123456&mode=preview"
+        let html = generatedHTML(
+            text: text,
+            runs: [attributeRun(for: text, link: href)]
+        )
+        let target = NoteLinkTarget(
+            markdownPath: "../EndMyopia/Preventing The Bad Plateau.md",
+            obsidianReference: "iCloud/EndMyopia/Preventing The Bad Plateau",
+            title: "Preventing The Bad Plateau"
+        )
+        let note = makeNote(htmlBody: html)
+
+        XCTAssertTrue(html.contains("identifier=x-coredata://ABCDEF-123456&amp;mode=preview"))
+        XCTAssertTrue(
+            note.toMarkdown(
+                flavor: .obsidian,
+                noteLinkTargets: ["x-coredata://ABCDEF-123456": target]
+            ).contains("[[iCloud/EndMyopia/Preventing The Bad Plateau|Plateau note]]")
+        )
+    }
+
     func testAppleNotesChecklistStateIsPreservedInMarkdown() throws {
         let note = makeNote(
             htmlBody: """
@@ -777,6 +906,27 @@ final class Apple_Notes_ExporterTests: XCTestCase {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             return trimmed.range(of: #"^(?:-|\d+\.)\s"#, options: .regularExpression) != nil
         }
+    }
+
+    private func generatedHTML(text: String, runs: [AttributeRun]) -> String {
+        var note = Note()
+        note.noteText = text
+        note.attributeRun = runs
+        return NoteHTMLGenerator(database: nil).generateHTML(from: note)
+    }
+
+    private func attributeRun(
+        for text: String,
+        link: String = "",
+        paragraphStyle: ParagraphStyle? = nil
+    ) -> AttributeRun {
+        var run = AttributeRun()
+        run.length = Int32(text.utf16.count)
+        run.link = link
+        if let paragraphStyle {
+            run.paragraphStyle = paragraphStyle
+        }
+        return run
     }
 
     private func makeNote(
