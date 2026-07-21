@@ -215,6 +215,28 @@ struct NotesAttachment: NotesItem {
     }
 }
 
+enum GalleryAttachmentPaths {
+    private static let keyMarker = "#gallery-child-"
+
+    static func additionalPathKey(parentId: String, index: Int) -> String {
+        "\(parentId)\(keyMarker)\(index)"
+    }
+
+    static func orderedPaths(parentId: String, in attachmentPaths: [String: String]) -> [String] {
+        var paths: [String] = []
+        if let primaryPath = attachmentPaths[parentId] {
+            paths.append(primaryPath)
+        }
+
+        var index = 1
+        while let path = attachmentPaths[additionalPathKey(parentId: parentId, index: index)] {
+            paths.append(path)
+            index += 1
+        }
+        return paths
+    }
+}
+
 // MARK: - Hierarchical Structure
 
 /// Represents a hierarchical tree structure for displaying accounts/folders/notes

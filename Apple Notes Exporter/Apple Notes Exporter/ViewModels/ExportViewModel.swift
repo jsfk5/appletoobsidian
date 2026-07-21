@@ -1065,7 +1065,7 @@ class ExportViewModel: ObservableObject {
     }
 
     /// Export attachments for a note and return a map of attachment IDs to relative paths
-    private func exportAttachmentsAndReturnPaths(
+    func exportAttachmentsAndReturnPaths(
         _ attachments: [NotesAttachment],
         toDirectory directory: URL,
         noteBaseName: String,
@@ -1111,6 +1111,58 @@ class ExportViewModel: ObservableObject {
             try Task.checkCancellation()
 
             do {
+                if attachment.typeUTI == "com.apple.notes.gallery" {
+                    let children = try await repository.fetchGalleryChildren(
+                        galleryId: attachment.id,
+                        accountId: nil
+                    )
+                    guard !children.isEmpty else {
+                        throw RepositoryError.attachmentNotFound(attachment.id)
+                    }
+
+                    for (index, child) in children.enumerated() {
+                        let childAttachment = NotesAttachment(
+                            id: child.id,
+                            typeUTI: child.uti ?? "public.image",
+                            filename: child.filename
+                        )
+                        let rawFilename = child.filename ?? child.id
+                        let baseFilename = normalizedAttachmentFilename(rawFilename, for: childAttachment)
+
+                        let finalFilename: String
+                        if let count = usedFilenames[baseFilename] {
+                            let (name, ext) = splitFilename(baseFilename)
+                            finalFilename = ext.isEmpty
+                                ? "\(name) (\(count + 1))"
+                                : "\(name) (\(count + 1)).\(ext)"
+                            usedFilenames[baseFilename] = count + 1
+                        } else {
+                            finalFilename = baseFilename
+                            usedFilenames[baseFilename] = 1
+                        }
+
+                        let fileURL = attachmentsURL.appendingPathComponent(finalFilename)
+                        try child.data.write(to: fileURL)
+                        try setFileTimestamps(
+                            fileURL,
+                            creationDate: noteCreationDate,
+                            modificationDate: noteModificationDate
+                        )
+
+                        let relativePath = "\(noteBaseName) (Attachments)/\(finalFilename)"
+                        if index == 0 {
+                            attachmentPaths[attachment.id] = relativePath
+                        } else {
+                            attachmentPaths[GalleryAttachmentPaths.additionalPathKey(
+                                parentId: attachment.id,
+                                index: index
+                            )] = relativePath
+                        }
+                        log("✓ Exported gallery image: \(finalFilename) for note '\(noteTitle)'")
+                    }
+                    continue
+                }
+
                 // Fetch attachment data from repository
                 let data = try await repository.fetchAttachment(id: attachment.id)
 

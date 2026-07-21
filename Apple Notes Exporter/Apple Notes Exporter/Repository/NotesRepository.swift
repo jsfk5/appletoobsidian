@@ -42,11 +42,21 @@ protocol NotesRepository {
     /// Fetch filename for a specific attachment
     func fetchAttachmentFilename(id: String) async -> String?
 
+    /// Fetch binary child attachments for a gallery container
+    func fetchGalleryChildren(galleryId: String, accountId: String?) async throws -> [GalleryChild]
+
     /// Generate HTML for a specific note (called during export)
     func generateHTML(forNoteId noteId: String) async throws -> String
 
     /// Build complete hierarchy of accounts, folders, and notes
     func fetchHierarchy(sortBy: NoteSortOption, foldersOnTop: Bool) async throws -> NotesHierarchy
+}
+
+struct GalleryChild: Sendable {
+    let id: String
+    let data: Data
+    let filename: String?
+    let uti: String?
 }
 
 // MARK: - Repository Errors
@@ -317,6 +327,50 @@ class DatabaseNotesRepository: NotesRepository, @unchecked Sendable {
         }
     }
 
+    func fetchGalleryChildren(galleryId: String, accountId: String?) async throws -> [GalleryChild] {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let db: OpaquePointer
+                do {
+                    db = try self.openDB()
+                } catch {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                defer { ane_close(db) }
+
+                ane_prefetch_attachments(db)
+
+                var count = 0
+                guard let children = ane_fetch_gallery_children(db, galleryId, accountId, &count),
+                      count > 0 else {
+                    continuation.resume(returning: [])
+                    return
+                }
+                defer { ane_free_gallery_children(children, count) }
+
+                var results: [GalleryChild] = []
+                results.reserveCapacity(count)
+                for index in 0..<count {
+                    let child = children[index]
+                    guard let identifier = child.identifier,
+                          let data = child.data,
+                          child.data_len > 0 else {
+                        continue
+                    }
+
+                    results.append(GalleryChild(
+                        id: String(cString: identifier),
+                        data: Data(bytes: data, count: child.data_len),
+                        filename: child.filename.map { String(cString: $0) },
+                        uti: child.type_uti.map { String(cString: $0) }
+                    ))
+                }
+                continuation.resume(returning: results)
+            }
+        }
+    }
+
     func fetchAttachmentFilename(id: String) async -> String? {
         await withCheckedContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
@@ -465,6 +519,7 @@ class MockNotesRepository: NotesRepository {
     var mockFolders: [NotesFolder] = []
     var mockNotes: [NotesNote] = []
     var mockAttachmentData: Data = Data()
+    var mockGalleryChildren: [GalleryChild] = []
 
     func fetchAccounts() async throws -> [NotesAccount] {
         try await Task.sleep(nanoseconds: 100_000_000)
@@ -488,6 +543,10 @@ class MockNotesRepository: NotesRepository {
 
     func fetchAttachmentFilename(id: String) async -> String? {
         return "mock-attachment.bin"
+    }
+
+    func fetchGalleryChildren(galleryId: String, accountId: String?) async throws -> [GalleryChild] {
+        mockGalleryChildren
     }
 
     func generateHTML(forNoteId noteId: String) async throws -> String {

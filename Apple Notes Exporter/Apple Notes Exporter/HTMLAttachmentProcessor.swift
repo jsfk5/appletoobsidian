@@ -217,6 +217,10 @@ class HTMLAttachmentProcessor {
                 for: attachment,
                 uuid: uuid,
                 relativePath: attachmentPaths[uuid],
+                galleryPaths: GalleryAttachmentPaths.orderedPaths(
+                    parentId: uuid,
+                    in: attachmentPaths
+                ),
                 embedImages: embedImages,
                 linkEmbeddedImages: linkEmbeddedImages
             )
@@ -232,9 +236,22 @@ class HTMLAttachmentProcessor {
         for attachment: NotesAttachment,
         uuid: String,
         relativePath: String?,
+        galleryPaths: [String],
         embedImages: Bool,
         linkEmbeddedImages: Bool
     ) -> String {
+        if attachment.typeUTI == "com.apple.notes.gallery", !galleryPaths.isEmpty {
+            return galleryPaths.map { path in
+                generateImageHTML(
+                    attachment: attachment,
+                    uuid: uuid,
+                    relativePath: path,
+                    embedInline: embedImages,
+                    wrapInLink: linkEmbeddedImages
+                )
+            }.joined(separator: "\n")
+        }
+
         // Check if this is an image
         // Also treat drawings/sketches as images since they have fallback image data
         if attachment.typeUTI.hasPrefix("public.image") ||
