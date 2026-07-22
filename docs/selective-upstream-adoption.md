@@ -79,7 +79,7 @@ Before a runtime adoption reaches the stable app path, it must preserve or prove
 
 Runtime candidates should first use synthetic notes and a temporary export root. Replacing an installed app, changing its bundle identity, or migrating scheduled automation happens only after those gates pass.
 
-Renderer corrections also need an explicit migration path for already-exported notes. The project must not hide a global refresh inside a normal incremental run. See [Markdown Renderer Migration Design](markdown-renderer-migration-design.md) for the proposed opt-in manifest and user-control contract.
+Renderer corrections also need an explicit migration path for already-exported notes. The project must not hide a global refresh inside a normal incremental run. See [Markdown Renderer Migration Design](markdown-renderer-migration-design.md) for the branch-tested opt-in manifest and command-line control contract.
 
 ## UI And Product Direction
 

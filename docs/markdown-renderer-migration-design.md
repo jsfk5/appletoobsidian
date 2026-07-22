@@ -6,7 +6,7 @@ These corrections should improve new exports without making an ordinary incremen
 
 ## Status
 
-This document defines the migration contract. The user-facing migration control and manifest field described below are not implemented yet. Renderer changes remain on the selective-adoption branch until this contract has focused tests and a temporary-export validation pass.
+The command-line migration control and optional manifest field are implemented on `codex/selective-upstream-adoption`. The automated migration gate passes, but the branch still needs a temporary-export validation pass before it is merged or installed for a personal workflow. A future UI control is not implemented yet.
 
 ## The Problem
 
@@ -24,7 +24,7 @@ The planner therefore cannot cheaply identify which unchanged notes contain a re
 6. A failed or cancelled refresh does not mark an unexported note as current.
 7. A second normal incremental run after a successful refresh exports zero unchanged notes.
 
-## Proposed Manifest Field
+## Manifest Field
 
 Add an optional renderer identifier to each synced-note entry, separate from the note content fingerprint and export-settings fingerprint:
 
@@ -36,7 +36,7 @@ The field is optional so existing manifests remain readable. Older app builds ig
 
 Renderer eligibility is evaluated only for Markdown exports in the selected output root. Other export formats do not become stale because the Markdown renderer changes.
 
-## Proposed Controls
+## Command-Line Controls
 
 Command line:
 
@@ -45,20 +45,41 @@ Command line:
 
 Using both flags reports the number of eligible notes and planned paths without writing or deleting files. The refresh flag by itself performs the explicit one-time refresh while retaining normal output-root and cleanup guards.
 
+Example preview:
+
+    "/Applications/Apple Notes Exporter.app/Contents/MacOS/Apple Notes Exporter" \
+      --output "/path/to/temporary/Apple Notes" \
+      --format markdown \
+      --refresh-renderer \
+      --dry-run
+
+Example one-time refresh after reviewing the preview:
+
+    "/Applications/Apple Notes Exporter.app/Contents/MacOS/Apple Notes Exporter" \
+      --output "/path/to/temporary/Apple Notes" \
+      --format markdown \
+      --refresh-renderer
+
+`--refresh-renderer` implies incremental mode and requires an existing sync manifest. Renderer refresh is rejected for non-Markdown formats. `--dry-run` currently requires `--refresh-renderer`.
+
 The existing nightly script does not include either flag, so scheduled incremental sync remains unchanged.
 
 The future UI should present a one-time command such as **Refresh Markdown for exporter updates**, show the eligible-note count, explain that existing Markdown files will be rewritten from Apple Notes, and require deliberate confirmation.
 
 ## Validation Gate
 
-Before renderer migration reaches the installed app:
+Automated checks completed on 2026-07-22:
 
-- Prove a normal incremental run does not select unchanged legacy entries.
-- Prove dry-run reports eligible notes without changing files or the manifest.
-- Prove explicit refresh selects only stale Markdown entries.
-- Prove successful notes receive the current renderer version.
-- Prove failed notes remain eligible.
-- Prove a second incremental run exports zero unchanged notes.
-- Run against a temporary export root before replacing the stable app.
+- A normal incremental run does not select unchanged legacy entries.
+- Dry-run reports eligible notes without changing files, orphan artifacts, or the manifest.
+- Explicit refresh selects stale Markdown entries while leaving current entries alone.
+- Successful notes receive the current renderer version.
+- Failed or cancelled notes remain eligible because renderer state is recorded per successful note.
+- A successful refresh settles to both a normal incremental no-op and a second refresh no-op.
+- Legacy manifests without the renderer field remain readable.
 
-Until these gates pass, renderer corrections may be reviewed and tested on a branch but must not be merged into the installed personal workflow.
+Remaining manual gate:
+
+- Run dry-run, explicit refresh, and a second normal incremental no-op against a temporary export root before replacing the stable app.
+
+Until the temporary-output gate passes, renderer corrections must not be merged into the installed personal workflow.

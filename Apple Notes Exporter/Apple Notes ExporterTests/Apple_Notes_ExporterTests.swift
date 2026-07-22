@@ -510,6 +510,183 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertTrue(markdown.contains("![[\(secondPath)]]"))
     }
 
+    func testNormalIncrementalSyncIgnoresRendererVersionUntilRefreshIsExplicit() {
+        let staleNote = makeNote(id: "stale-renderer", title: "Stale Renderer")
+        let currentNote = makeNote(id: "current-renderer", title: "Current Renderer")
+        var manifest = SyncManifest.empty()
+
+        manifest.recordExport(
+            noteId: staleNote.id,
+            modificationDate: staleNote.modificationDate,
+            exportedPath: "iCloud/Stale Renderer.md",
+            contentFingerprint: NoteContentFingerprint.value(for: staleNote)
+        )
+        manifest.recordExport(
+            noteId: currentNote.id,
+            modificationDate: currentNote.modificationDate,
+            exportedPath: "iCloud/Current Renderer.md",
+            contentFingerprint: NoteContentFingerprint.value(for: currentNote),
+            markdownRendererVersion: MarkdownRenderer.currentVersion
+        )
+
+        let normalSelection = manifest.notesNeedingExport(
+            from: [staleNote, currentNote],
+            contentFingerprint: { NoteContentFingerprint.value(for: $0) }
+        )
+        let refreshSelection = manifest.notesNeedingExport(
+            from: [staleNote, currentNote],
+            contentFingerprint: { NoteContentFingerprint.value(for: $0) },
+            markdownRendererRefreshVersion: MarkdownRenderer.currentVersion
+        )
+
+        XCTAssertTrue(normalSelection.isEmpty)
+        XCTAssertEqual(refreshSelection.map(\.id), [staleNote.id])
+    }
+
+    func testSuccessfulRendererRefreshSettlesToNormalAndRefreshNoOp() {
+        let note = makeNote(id: "refreshed-note", title: "Refreshed Note")
+        var manifest = SyncManifest.empty()
+        manifest.recordExport(
+            noteId: note.id,
+            modificationDate: note.modificationDate,
+            exportedPath: "iCloud/Refreshed Note.md",
+            contentFingerprint: NoteContentFingerprint.value(for: note),
+            markdownRendererVersion: MarkdownRenderer.currentVersion
+        )
+
+        let normalSelection = manifest.notesNeedingExport(
+            from: [note],
+            contentFingerprint: { NoteContentFingerprint.value(for: $0) }
+        )
+        let refreshSelection = manifest.notesNeedingExport(
+            from: [note],
+            contentFingerprint: { NoteContentFingerprint.value(for: $0) },
+            markdownRendererRefreshVersion: MarkdownRenderer.currentVersion
+        )
+
+        XCTAssertTrue(normalSelection.isEmpty)
+        XCTAssertTrue(refreshSelection.isEmpty)
+        XCTAssertEqual(
+            manifest.notes[note.id]?.markdownRendererVersion,
+            MarkdownRenderer.currentVersion
+        )
+    }
+
+    func testUnrecordedRendererRefreshRemainsEligibleAfterPartialSuccess() {
+        let successfulNote = makeNote(id: "successful-refresh", title: "Successful Refresh")
+        let failedOrCancelledNote = makeNote(id: "unfinished-refresh", title: "Unfinished Refresh")
+        var manifest = SyncManifest.empty()
+
+        for note in [successfulNote, failedOrCancelledNote] {
+            manifest.recordExport(
+                noteId: note.id,
+                modificationDate: note.modificationDate,
+                exportedPath: "iCloud/\(note.title).md",
+                contentFingerprint: NoteContentFingerprint.value(for: note)
+            )
+        }
+
+        manifest.recordExport(
+            noteId: successfulNote.id,
+            modificationDate: successfulNote.modificationDate,
+            exportedPath: "iCloud/Successful Refresh.md",
+            contentFingerprint: NoteContentFingerprint.value(for: successfulNote),
+            markdownRendererVersion: MarkdownRenderer.currentVersion
+        )
+
+        let remainingPlan = manifest.markdownRendererRefreshPlan(
+            from: [successfulNote, failedOrCancelledNote],
+            currentVersion: MarkdownRenderer.currentVersion
+        )
+
+        XCTAssertEqual(remainingPlan.map(\.noteId), [failedOrCancelledNote.id])
+        XCTAssertNil(manifest.notes[failedOrCancelledNote.id]?.markdownRendererVersion)
+    }
+
+    func testLegacyManifestWithoutRendererVersionRemainsReadableAndRefreshEligible() throws {
+        let json = """
+        {
+          "lastSync": 1700000100,
+          "notes": {
+            "legacy-note": {
+              "attachmentPaths": [],
+              "contentFingerprint": "fingerprint",
+              "exportedPath": "iCloud/Legacy Note.md",
+              "modificationDate": 1700000100
+            }
+          },
+          "version": 1
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let manifest = try decoder.decode(SyncManifest.self, from: Data(json.utf8))
+        let note = makeNote(
+            id: "legacy-note",
+            title: "Legacy Note",
+            modificationDate: Date(timeIntervalSince1970: 1_700_000_100)
+        )
+
+        XCTAssertNil(manifest.notes[note.id]?.markdownRendererVersion)
+        XCTAssertEqual(
+            manifest.markdownRendererRefreshPlan(
+                from: [note],
+                currentVersion: MarkdownRenderer.currentVersion
+            ).map(\.exportedPath),
+            ["iCloud/Legacy Note.md"]
+        )
+    }
+
+    @MainActor
+    func testRendererDryRunPlanDoesNotWriteDeleteOrUpdateManifest() async throws {
+        let fileManager = FileManager.default
+        let outputURL = fileManager.temporaryDirectory
+            .appendingPathComponent("AppleNotesRendererDryRun-\(UUID().uuidString)", isDirectory: true)
+        let noteURL = outputURL.appendingPathComponent("iCloud/Legacy Note.md")
+        let orphanURL = outputURL.appendingPathComponent("iCloud/Orphan.md")
+        try fileManager.createDirectory(at: noteURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "legacy markdown".write(to: noteURL, atomically: true, encoding: .utf8)
+        try "preserve me".write(to: orphanURL, atomically: true, encoding: .utf8)
+        defer { try? fileManager.removeItem(at: outputURL) }
+
+        let note = makeNote(id: "legacy-note", title: "Legacy Note")
+        var manifest = SyncManifest.empty()
+        manifest.recordExport(
+            noteId: note.id,
+            modificationDate: note.modificationDate,
+            exportedPath: "iCloud/Legacy Note.md",
+            contentFingerprint: NoteContentFingerprint.value(for: note)
+        )
+        try manifest.save(to: outputURL)
+        let manifestURL = outputURL.appendingPathComponent(SyncManifest.filename)
+        let manifestBefore = try Data(contentsOf: manifestURL)
+
+        let plan = try await ExportViewModel(repository: MockNotesRepository()).markdownRendererRefreshPlan(
+            for: [note],
+            outputURL: outputURL,
+            format: .markdown
+        )
+
+        XCTAssertEqual(plan.map(\.exportedPath), ["iCloud/Legacy Note.md"])
+        XCTAssertEqual(try Data(contentsOf: manifestURL), manifestBefore)
+        XCTAssertEqual(try String(contentsOf: noteURL, encoding: .utf8), "legacy markdown")
+        XCTAssertEqual(try String(contentsOf: orphanURL, encoding: .utf8), "preserve me")
+    }
+
+    func testLaunchOptionsParseExplicitRendererRefreshDryRun() throws {
+        let options = try XCTUnwrap(LaunchExportOptions.parse(arguments: [
+            "Apple Notes Exporter",
+            "--output", "/tmp/apple-notes-renderer-preview",
+            "--format", "markdown",
+            "--refresh-renderer",
+            "--dry-run"
+        ]))
+
+        XCTAssertTrue(options.incrementalSync)
+        XCTAssertTrue(options.refreshRenderer)
+        XCTAssertTrue(options.dryRun)
+    }
+
     @MainActor
     func testStaleManifestCleanupDoesNotDeleteOutsideOutputRoot() throws {
         let fileManager = FileManager.default

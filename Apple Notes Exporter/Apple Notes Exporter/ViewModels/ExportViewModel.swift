@@ -28,11 +28,17 @@ import CryptoKit
 
 enum ExportError: Error, LocalizedError {
     case pdfGenerationTimeout
+    case rendererRefreshRequiresMarkdown
+    case rendererRefreshRequiresManifest
 
     var errorDescription: String? {
         switch self {
         case .pdfGenerationTimeout:
             return "PDF generation timed out after 60 seconds. This note may contain many large images or corrupted attachments."
+        case .rendererRefreshRequiresMarkdown:
+            return "Renderer refresh is available only for Markdown exports."
+        case .rendererRefreshRequiresManifest:
+            return "Renderer refresh requires an existing incremental sync manifest in the selected output folder."
         }
     }
 }
@@ -53,7 +59,8 @@ actor SyncManifestTracker {
         exportedPath: String,
         attachmentPaths: [String] = [],
         exportFingerprint: String? = nil,
-        contentFingerprint: String? = nil
+        contentFingerprint: String? = nil,
+        markdownRendererVersion: String? = nil
     ) {
         manifest.recordExport(
             noteId: noteId,
@@ -61,7 +68,8 @@ actor SyncManifestTracker {
             exportedPath: exportedPath,
             attachmentPaths: attachmentPaths,
             exportFingerprint: exportFingerprint,
-            contentFingerprint: contentFingerprint
+            contentFingerprint: contentFingerprint,
+            markdownRendererVersion: markdownRendererVersion
         )
     }
 
@@ -375,7 +383,8 @@ class ExportViewModel: ObservableObject {
         _ notes: [NotesNote],
         toDirectory outputURL: URL,
         format: ExportFormat,
-        includeAttachments: Bool = true
+        includeAttachments: Bool = true,
+        refreshMarkdownRenderer: Bool = false
     ) async {
         // Reset state and clear log for new export
         shouldCancel = false
@@ -385,6 +394,13 @@ class ExportViewModel: ObservableObject {
         let startTime = Date()
 
         do {
+            if refreshMarkdownRenderer && format != .markdown {
+                throw ExportError.rendererRefreshRequiresMarkdown
+            }
+            if refreshMarkdownRenderer && !configurations.incrementalSync {
+                throw ExportError.rendererRefreshRequiresManifest
+            }
+
             let exportableNotes = try await notesExcludingRecentlyDeleted(notes)
             let currentExportNoteIDs = Set(exportableNotes.map(\.id))
             let accountNames = try await accountNameLookup()
@@ -403,6 +419,9 @@ class ExportViewModel: ObservableObject {
             // Incremental sync: load existing manifest and filter to new/changed notes
             let isSync = configurations.incrementalSync
             let existingManifest = isSync ? SyncManifest.load(from: outputURL) : nil
+            if refreshMarkdownRenderer && existingManifest == nil {
+                throw ExportError.rendererRefreshRequiresManifest
+            }
             let syncTracker: SyncManifestTracker?
             let exportFingerprint = currentExportFingerprint(for: format)
             let contentFingerprint: (NotesNote) -> String? = { note in
@@ -418,8 +437,17 @@ class ExportViewModel: ObservableObject {
                     from: exportableNotes,
                     exportFingerprint: exportFingerprint,
                     contentFingerprint: contentFingerprint,
-                    acceptedContentFingerprints: acceptedContentFingerprints
+                    acceptedContentFingerprints: acceptedContentFingerprints,
+                    markdownRendererRefreshVersion: refreshMarkdownRenderer
+                        ? MarkdownRenderer.currentVersion
+                        : nil
                 )
+                let rendererRefreshCount = refreshMarkdownRenderer
+                    ? manifest.markdownRendererRefreshPlan(
+                        from: exportableNotes,
+                        currentVersion: MarkdownRenderer.currentVersion
+                    ).count
+                    : 0
                 let settingsDrivenCount = exportableNotes.countMatchingExportFingerprintChange(
                     manifest: manifest,
                     exportFingerprint: exportFingerprint
@@ -475,6 +503,8 @@ class ExportViewModel: ObservableObject {
                 }
                 if settingsDrivenCount > 0 {
                     log("Incremental sync: export settings changed, validating \(notesToExport.count) notes of \(exportableNotes.count) total")
+                } else if refreshMarkdownRenderer {
+                    log("Renderer refresh: \(rendererRefreshCount) eligible notes; exporting \(notesToExport.count) notes including new or changed notes")
                 } else {
                     log("Incremental sync: \(notesToExport.count) new/changed notes of \(exportableNotes.count) total")
                 }
@@ -1052,7 +1082,10 @@ class ExportViewModel: ObservableObject {
                 exportedPath: relativePath,
                 attachmentPaths: attachmentRelPaths,
                 exportFingerprint: exportFingerprint,
-                contentFingerprint: noteContentFingerprint(note)
+                contentFingerprint: noteContentFingerprint(note),
+                markdownRendererVersion: format == .markdown
+                    ? MarkdownRenderer.currentVersion
+                    : nil
             )
         }
 
@@ -1672,6 +1705,25 @@ class ExportViewModel: ObservableObject {
         return notes.filter { note in
             !isInRecentlyDeleted(folderId: note.folderId, folderLookup: folderLookup)
         }
+    }
+
+    func markdownRendererRefreshPlan(
+        for notes: [NotesNote],
+        outputURL: URL,
+        format: ExportFormat
+    ) async throws -> [SyncManifest.MarkdownRendererRefreshPlanItem] {
+        guard format == .markdown else {
+            throw ExportError.rendererRefreshRequiresMarkdown
+        }
+        guard let manifest = SyncManifest.load(from: outputURL) else {
+            throw ExportError.rendererRefreshRequiresManifest
+        }
+
+        let exportableNotes = try await notesExcludingRecentlyDeleted(notes)
+        return manifest.markdownRendererRefreshPlan(
+            from: exportableNotes,
+            currentVersion: MarkdownRenderer.currentVersion
+        )
     }
 
     func isInRecentlyDeleted(folderId: String, folderLookup: [String: NotesFolder]) -> Bool {
