@@ -98,11 +98,20 @@ Pass a different output directory as the only argument when needed:
 
 The candidate still requires its own Full Disk Access grant before reading Apple Notes. Run it only against an isolated export root. Do not replace the stable app until the candidate passes automated tests, a real database-open check, the required human fixtures, and a follow-up incremental no-op.
 
+The separate candidate identity also starts with fresh saved UI settings. Do not use its GUI Export/Sync button for validation. Pass every output-affecting command-line setting explicitly so the candidate matches the copied manifest.
+
 For a one-shot command-line candidate check, launch the app through LaunchServices:
 
 ```sh
-open -W -n "/path/to/Apple to Obsidian Candidate build 19.app" --args ...
+open -W -n "/path/to/Apple to Obsidian Candidate build N.app" --args \
+  --output "/path/to/isolated/Apple Notes" \
+  --format markdown \
+  --incremental \
+  --attachments \
+  --obsidian-links
 ```
+
+Use `--no-obsidian-links` only when the copied export manifest was created without Obsidian wikilink conversion. A mismatch changes the Markdown export fingerprint and deliberately makes existing notes eligible for re-export.
 
 Do not use `launchctl submit` for one-shot validation. A submitted executable can inherit keepalive behavior and relaunch after every successful exit.
 

@@ -42,6 +42,8 @@ Command line:
 
     --refresh-renderer
     --dry-run
+    --obsidian-links
+    --no-obsidian-links
 
 Using both flags reports the number of eligible notes and planned paths without writing or deleting files. The refresh flag by itself performs the explicit one-time refresh while retaining normal output-root and cleanup guards.
 
@@ -50,6 +52,7 @@ Example preview:
     "/Applications/Apple Notes Exporter.app/Contents/MacOS/Apple Notes Exporter" \
       --output "/path/to/temporary/Apple Notes" \
       --format markdown \
+      --obsidian-links \
       --refresh-renderer \
       --dry-run
 
@@ -58,11 +61,14 @@ Example one-time refresh after reviewing the preview:
     "/Applications/Apple Notes Exporter.app/Contents/MacOS/Apple Notes Exporter" \
       --output "/path/to/temporary/Apple Notes" \
       --format markdown \
+      --obsidian-links \
       --refresh-renderer
 
 `--refresh-renderer` implies incremental mode and requires an existing sync manifest. Renderer refresh is rejected for non-Markdown formats. `--dry-run` currently requires `--refresh-renderer`.
 
-The existing nightly script does not include either flag, so scheduled incremental sync remains unchanged.
+`--obsidian-links` and `--no-obsidian-links` explicitly control Apple Notes link conversion for command-line exports. If neither is present, the app retains its saved setting for backward compatibility. Validation candidates use a separate preference domain, so their commands should always pass the setting that matches the copied manifest.
+
+The existing nightly script does not include the renderer-refresh flags, so scheduled incremental sync remains unchanged.
 
 The future UI should present a one-time command such as **Refresh Markdown for exporter updates**, show the eligible-note count, explain that existing Markdown files will be rewritten from Apple Notes, and require deliberate confirmation.
 

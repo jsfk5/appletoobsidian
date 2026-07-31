@@ -519,6 +519,7 @@ class MockNotesRepository: NotesRepository {
     var mockFolders: [NotesFolder] = []
     var mockNotes: [NotesNote] = []
     var mockAttachmentData: Data = Data()
+    var mockAttachmentFilename: String? = "mock-attachment.bin"
     var mockGalleryChildren: [GalleryChild] = []
 
     func fetchAccounts() async throws -> [NotesAccount] {
@@ -542,7 +543,7 @@ class MockNotesRepository: NotesRepository {
     }
 
     func fetchAttachmentFilename(id: String) async -> String? {
-        return "mock-attachment.bin"
+        mockAttachmentFilename
     }
 
     func fetchGalleryChildren(galleryId: String, accountId: String?) async throws -> [GalleryChild] {

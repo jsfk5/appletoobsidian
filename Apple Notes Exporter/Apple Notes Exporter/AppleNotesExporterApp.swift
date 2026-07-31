@@ -86,6 +86,7 @@ struct LaunchExportOptions {
     let format: ExportFormat
     let incrementalSync: Bool
     let includeAttachments: Bool
+    let obsidianInternalLinksInMarkdown: Bool?
     let quitWhenDone: Bool
     let refreshRenderer: Bool
     let dryRun: Bool
@@ -95,6 +96,8 @@ struct LaunchExportOptions {
         let hasExportOptions = arguments.contains("--output")
             || arguments.contains("--format")
             || arguments.contains("--incremental")
+            || arguments.contains("--obsidian-links")
+            || arguments.contains("--no-obsidian-links")
             || arguments.contains("--refresh-renderer")
             || arguments.contains("--dry-run")
         guard hasExportFlag || hasExportOptions else {
@@ -105,6 +108,7 @@ struct LaunchExportOptions {
         var format: ExportFormat = .markdown
         var incrementalSync = false
         var includeAttachments = true
+        var obsidianInternalLinksInMarkdown: Bool?
         var quitWhenDone = true
         var refreshRenderer = false
         var dryRun = false
@@ -131,6 +135,10 @@ struct LaunchExportOptions {
                 includeAttachments = true
             case "--no-attachments":
                 includeAttachments = false
+            case "--obsidian-links":
+                obsidianInternalLinksInMarkdown = true
+            case "--no-obsidian-links":
+                obsidianInternalLinksInMarkdown = false
             case "--keep-open":
                 quitWhenDone = false
             case "--refresh-renderer":
@@ -153,6 +161,7 @@ struct LaunchExportOptions {
             format: format,
             incrementalSync: incrementalSync || refreshRenderer,
             includeAttachments: includeAttachments,
+            obsidianInternalLinksInMarkdown: obsidianInternalLinksInMarkdown,
             quitWhenDone: quitWhenDone,
             refreshRenderer: refreshRenderer,
             dryRun: dryRun
@@ -324,6 +333,9 @@ class AppleNotesExporterState: ObservableObject {
 
         exportViewModel.configurations.incrementalSync = options.incrementalSync
         exportViewModel.configurations.includeAttachments = options.includeAttachments
+        if let obsidianInternalLinksInMarkdown = options.obsidianInternalLinksInMarkdown {
+            exportViewModel.configurations.obsidianInternalLinksInMarkdown = obsidianInternalLinksInMarkdown
+        }
         exportViewModel.saveConfigurations()
 
         await exportViewModel.exportNotes(

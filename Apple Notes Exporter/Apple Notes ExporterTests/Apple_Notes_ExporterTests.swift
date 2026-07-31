@@ -510,6 +510,51 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertTrue(markdown.contains("![[\(secondPath)]]"))
     }
 
+    @MainActor
+    func testDrawingFallbackUsesExtensionDetectedFromBytes() async throws {
+        let fileManager = FileManager.default
+        let outputURL = fileManager.temporaryDirectory
+            .appendingPathComponent("AppleNotesDrawingExport-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: outputURL, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: outputURL) }
+
+        let pngData = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01])
+        let repository = MockNotesRepository()
+        repository.mockAttachmentData = pngData
+        repository.mockAttachmentFilename = "drawing-fallback.jpg"
+        let viewModel = ExportViewModel(repository: repository, databasePath: ":memory:")
+        let tracker = ExportProgressTracker()
+        let drawing = NotesAttachment(
+            id: "drawing-fallback",
+            typeUTI: "com.apple.drawing.2",
+            filename: nil
+        )
+
+        let attachmentPaths = try await viewModel.exportAttachmentsAndReturnPaths(
+            [drawing],
+            toDirectory: outputURL,
+            noteBaseName: "Handwritten Note",
+            noteTitle: "Handwritten Note",
+            noteCreationDate: Date(timeIntervalSince1970: 1_700_000_000),
+            noteModificationDate: Date(timeIntervalSince1970: 1_700_000_100),
+            tracker: tracker
+        )
+
+        let expectedPath = "Handwritten Note (Attachments)/drawing-fallback.png"
+        XCTAssertEqual(attachmentPaths[drawing.id], expectedPath)
+        XCTAssertEqual(try Data(contentsOf: outputURL.appendingPathComponent(expectedPath)), pngData)
+        let stats = await tracker.getStats()
+        XCTAssertEqual(stats.failedAttachments, 0)
+    }
+
+    func testAttachmentFileSignaturePreservesJPEGExtensionAliases() {
+        let jpegData = Data([0xFF, 0xD8, 0xFF, 0xE0])
+
+        XCTAssertEqual(AttachmentFileSignature.fileExtension(for: jpegData), "jpg")
+        XCTAssertTrue(AttachmentFileSignature.matches("jpeg", "jpg"))
+        XCTAssertFalse(AttachmentFileSignature.matches("png", "jpg"))
+    }
+
     func testNormalIncrementalSyncIgnoresRendererVersionUntilRefreshIsExplicit() {
         let staleNote = makeNote(id: "stale-renderer", title: "Stale Renderer")
         let currentNote = makeNote(id: "current-renderer", title: "Current Renderer")
@@ -685,6 +730,27 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertTrue(options.incrementalSync)
         XCTAssertTrue(options.refreshRenderer)
         XCTAssertTrue(options.dryRun)
+        XCTAssertNil(options.obsidianInternalLinksInMarkdown)
+    }
+
+    func testLaunchOptionsParseExplicitObsidianLinkSetting() throws {
+        let enabled = try XCTUnwrap(LaunchExportOptions.parse(arguments: [
+            "Apple Notes Exporter",
+            "--output", "/tmp/apple-notes-obsidian-links",
+            "--format", "markdown",
+            "--incremental",
+            "--obsidian-links"
+        ]))
+        let disabled = try XCTUnwrap(LaunchExportOptions.parse(arguments: [
+            "Apple Notes Exporter",
+            "--output", "/tmp/apple-notes-plain-links",
+            "--format", "markdown",
+            "--incremental",
+            "--no-obsidian-links"
+        ]))
+
+        XCTAssertEqual(enabled.obsidianInternalLinksInMarkdown, true)
+        XCTAssertEqual(disabled.obsidianInternalLinksInMarkdown, false)
     }
 
     @MainActor

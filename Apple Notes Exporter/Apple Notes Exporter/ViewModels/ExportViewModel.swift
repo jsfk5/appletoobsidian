@@ -1160,7 +1160,11 @@ class ExportViewModel: ObservableObject {
                             filename: child.filename
                         )
                         let rawFilename = child.filename ?? child.id
-                        let baseFilename = normalizedAttachmentFilename(rawFilename, for: childAttachment)
+                        let baseFilename = normalizedAttachmentFilename(
+                            rawFilename,
+                            for: childAttachment,
+                            data: child.data
+                        )
 
                         let finalFilename: String
                         if let count = usedFilenames[baseFilename] {
@@ -1211,7 +1215,11 @@ class ExportViewModel: ObservableObject {
                     rawFilename = attachment.id
                 }
 
-                let baseFilename = normalizedAttachmentFilename(rawFilename, for: attachment)
+                let baseFilename = normalizedAttachmentFilename(
+                    rawFilename,
+                    for: attachment,
+                    data: data
+                )
 
                 // Handle filename collisions by adding a counter suffix
                 let finalFilename: String
@@ -2191,14 +2199,31 @@ class ExportViewModel: ObservableObject {
         return isDerivedFilename(existingBaseName, fromPreferredBase: preferredBaseName)
     }
 
-    private func normalizedAttachmentFilename(_ rawFilename: String, for attachment: NotesAttachment) -> String {
+    private func normalizedAttachmentFilename(
+        _ rawFilename: String,
+        for attachment: NotesAttachment,
+        data: Data? = nil
+    ) -> String {
         let trimmed = rawFilename.trimmingCharacters(in: .whitespacesAndNewlines)
         let lastPathComponent = URL(fileURLWithPath: trimmed).lastPathComponent
         let fallbackName = lastPathComponent.isEmpty ? attachment.id : lastPathComponent
         let sanitized = sanitizeFilename(fallbackName)
         let baseName = sanitized.isEmpty ? attachment.id : sanitized
+        let existingExtension = URL(fileURLWithPath: baseName).pathExtension
 
-        if URL(fileURLWithPath: baseName).pathExtension.isEmpty,
+        if let data,
+           let detectedExtension = AttachmentFileSignature.fileExtension(for: data) {
+            if existingExtension.isEmpty {
+                return "\(baseName).\(detectedExtension)"
+            }
+            if !AttachmentFileSignature.matches(existingExtension, detectedExtension) {
+                let suffixLength = existingExtension.count + 1
+                let stem = String(baseName.dropLast(suffixLength))
+                return "\(stem).\(detectedExtension)"
+            }
+        }
+
+        if existingExtension.isEmpty,
            let fileExtension = attachment.fileExtension,
            !fileExtension.isEmpty {
             return "\(baseName).\(fileExtension)"
