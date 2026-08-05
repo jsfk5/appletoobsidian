@@ -28,11 +28,17 @@ import CryptoKit
 
 enum ExportError: Error, LocalizedError {
     case pdfGenerationTimeout
+    case rendererRefreshRequiresMarkdown
+    case rendererRefreshRequiresManifest
 
     var errorDescription: String? {
         switch self {
         case .pdfGenerationTimeout:
             return "PDF generation timed out after 60 seconds. This note may contain many large images or corrupted attachments."
+        case .rendererRefreshRequiresMarkdown:
+            return "Renderer refresh is available only for Markdown exports."
+        case .rendererRefreshRequiresManifest:
+            return "Renderer refresh requires an existing incremental sync manifest in the selected output folder."
         }
     }
 }
@@ -53,7 +59,8 @@ actor SyncManifestTracker {
         exportedPath: String,
         attachmentPaths: [String] = [],
         exportFingerprint: String? = nil,
-        contentFingerprint: String? = nil
+        contentFingerprint: String? = nil,
+        markdownRendererVersion: String? = nil
     ) {
         manifest.recordExport(
             noteId: noteId,
@@ -61,7 +68,8 @@ actor SyncManifestTracker {
             exportedPath: exportedPath,
             attachmentPaths: attachmentPaths,
             exportFingerprint: exportFingerprint,
-            contentFingerprint: contentFingerprint
+            contentFingerprint: contentFingerprint,
+            markdownRendererVersion: markdownRendererVersion
         )
     }
 
@@ -375,7 +383,8 @@ class ExportViewModel: ObservableObject {
         _ notes: [NotesNote],
         toDirectory outputURL: URL,
         format: ExportFormat,
-        includeAttachments: Bool = true
+        includeAttachments: Bool = true,
+        refreshMarkdownRenderer: Bool = false
     ) async {
         // Reset state and clear log for new export
         shouldCancel = false
@@ -385,6 +394,13 @@ class ExportViewModel: ObservableObject {
         let startTime = Date()
 
         do {
+            if refreshMarkdownRenderer && format != .markdown {
+                throw ExportError.rendererRefreshRequiresMarkdown
+            }
+            if refreshMarkdownRenderer && !configurations.incrementalSync {
+                throw ExportError.rendererRefreshRequiresManifest
+            }
+
             let exportableNotes = try await notesExcludingRecentlyDeleted(notes)
             let currentExportNoteIDs = Set(exportableNotes.map(\.id))
             let accountNames = try await accountNameLookup()
@@ -403,6 +419,9 @@ class ExportViewModel: ObservableObject {
             // Incremental sync: load existing manifest and filter to new/changed notes
             let isSync = configurations.incrementalSync
             let existingManifest = isSync ? SyncManifest.load(from: outputURL) : nil
+            if refreshMarkdownRenderer && existingManifest == nil {
+                throw ExportError.rendererRefreshRequiresManifest
+            }
             let syncTracker: SyncManifestTracker?
             let exportFingerprint = currentExportFingerprint(for: format)
             let contentFingerprint: (NotesNote) -> String? = { note in
@@ -418,8 +437,17 @@ class ExportViewModel: ObservableObject {
                     from: exportableNotes,
                     exportFingerprint: exportFingerprint,
                     contentFingerprint: contentFingerprint,
-                    acceptedContentFingerprints: acceptedContentFingerprints
+                    acceptedContentFingerprints: acceptedContentFingerprints,
+                    markdownRendererRefreshVersion: refreshMarkdownRenderer
+                        ? MarkdownRenderer.currentVersion
+                        : nil
                 )
+                let rendererRefreshCount = refreshMarkdownRenderer
+                    ? manifest.markdownRendererRefreshPlan(
+                        from: exportableNotes,
+                        currentVersion: MarkdownRenderer.currentVersion
+                    ).count
+                    : 0
                 let settingsDrivenCount = exportableNotes.countMatchingExportFingerprintChange(
                     manifest: manifest,
                     exportFingerprint: exportFingerprint
@@ -475,6 +503,8 @@ class ExportViewModel: ObservableObject {
                 }
                 if settingsDrivenCount > 0 {
                     log("Incremental sync: export settings changed, validating \(notesToExport.count) notes of \(exportableNotes.count) total")
+                } else if refreshMarkdownRenderer {
+                    log("Renderer refresh: \(rendererRefreshCount) eligible notes; exporting \(notesToExport.count) notes including new or changed notes")
                 } else {
                     log("Incremental sync: \(notesToExport.count) new/changed notes of \(exportableNotes.count) total")
                 }
@@ -1052,7 +1082,10 @@ class ExportViewModel: ObservableObject {
                 exportedPath: relativePath,
                 attachmentPaths: attachmentRelPaths,
                 exportFingerprint: exportFingerprint,
-                contentFingerprint: noteContentFingerprint(note)
+                contentFingerprint: noteContentFingerprint(note),
+                markdownRendererVersion: format == .markdown
+                    ? MarkdownRenderer.currentVersion
+                    : nil
             )
         }
 
@@ -1065,7 +1098,7 @@ class ExportViewModel: ObservableObject {
     }
 
     /// Export attachments for a note and return a map of attachment IDs to relative paths
-    private func exportAttachmentsAndReturnPaths(
+    func exportAttachmentsAndReturnPaths(
         _ attachments: [NotesAttachment],
         toDirectory directory: URL,
         noteBaseName: String,
@@ -1111,6 +1144,62 @@ class ExportViewModel: ObservableObject {
             try Task.checkCancellation()
 
             do {
+                if attachment.typeUTI == "com.apple.notes.gallery" {
+                    let children = try await repository.fetchGalleryChildren(
+                        galleryId: attachment.id,
+                        accountId: nil
+                    )
+                    guard !children.isEmpty else {
+                        throw RepositoryError.attachmentNotFound(attachment.id)
+                    }
+
+                    for (index, child) in children.enumerated() {
+                        let childAttachment = NotesAttachment(
+                            id: child.id,
+                            typeUTI: child.uti ?? "public.image",
+                            filename: child.filename
+                        )
+                        let rawFilename = child.filename ?? child.id
+                        let baseFilename = normalizedAttachmentFilename(
+                            rawFilename,
+                            for: childAttachment,
+                            data: child.data
+                        )
+
+                        let finalFilename: String
+                        if let count = usedFilenames[baseFilename] {
+                            let (name, ext) = splitFilename(baseFilename)
+                            finalFilename = ext.isEmpty
+                                ? "\(name) (\(count + 1))"
+                                : "\(name) (\(count + 1)).\(ext)"
+                            usedFilenames[baseFilename] = count + 1
+                        } else {
+                            finalFilename = baseFilename
+                            usedFilenames[baseFilename] = 1
+                        }
+
+                        let fileURL = attachmentsURL.appendingPathComponent(finalFilename)
+                        try child.data.write(to: fileURL)
+                        try setFileTimestamps(
+                            fileURL,
+                            creationDate: noteCreationDate,
+                            modificationDate: noteModificationDate
+                        )
+
+                        let relativePath = "\(noteBaseName) (Attachments)/\(finalFilename)"
+                        if index == 0 {
+                            attachmentPaths[attachment.id] = relativePath
+                        } else {
+                            attachmentPaths[GalleryAttachmentPaths.additionalPathKey(
+                                parentId: attachment.id,
+                                index: index
+                            )] = relativePath
+                        }
+                        log("✓ Exported gallery image: \(finalFilename) for note '\(noteTitle)'")
+                    }
+                    continue
+                }
+
                 // Fetch attachment data from repository
                 let data = try await repository.fetchAttachment(id: attachment.id)
 
@@ -1126,7 +1215,11 @@ class ExportViewModel: ObservableObject {
                     rawFilename = attachment.id
                 }
 
-                let baseFilename = normalizedAttachmentFilename(rawFilename, for: attachment)
+                let baseFilename = normalizedAttachmentFilename(
+                    rawFilename,
+                    for: attachment,
+                    data: data
+                )
 
                 // Handle filename collisions by adding a counter suffix
                 let finalFilename: String
@@ -1622,6 +1715,25 @@ class ExportViewModel: ObservableObject {
         }
     }
 
+    func markdownRendererRefreshPlan(
+        for notes: [NotesNote],
+        outputURL: URL,
+        format: ExportFormat
+    ) async throws -> [SyncManifest.MarkdownRendererRefreshPlanItem] {
+        guard format == .markdown else {
+            throw ExportError.rendererRefreshRequiresMarkdown
+        }
+        guard let manifest = SyncManifest.load(from: outputURL) else {
+            throw ExportError.rendererRefreshRequiresManifest
+        }
+
+        let exportableNotes = try await notesExcludingRecentlyDeleted(notes)
+        return manifest.markdownRendererRefreshPlan(
+            from: exportableNotes,
+            currentVersion: MarkdownRenderer.currentVersion
+        )
+    }
+
     func isInRecentlyDeleted(folderId: String, folderLookup: [String: NotesFolder]) -> Bool {
         var currentFolderId: String? = folderId
         var visitedFolderIDs: Set<String> = []
@@ -2087,14 +2199,31 @@ class ExportViewModel: ObservableObject {
         return isDerivedFilename(existingBaseName, fromPreferredBase: preferredBaseName)
     }
 
-    private func normalizedAttachmentFilename(_ rawFilename: String, for attachment: NotesAttachment) -> String {
+    private func normalizedAttachmentFilename(
+        _ rawFilename: String,
+        for attachment: NotesAttachment,
+        data: Data? = nil
+    ) -> String {
         let trimmed = rawFilename.trimmingCharacters(in: .whitespacesAndNewlines)
         let lastPathComponent = URL(fileURLWithPath: trimmed).lastPathComponent
         let fallbackName = lastPathComponent.isEmpty ? attachment.id : lastPathComponent
         let sanitized = sanitizeFilename(fallbackName)
         let baseName = sanitized.isEmpty ? attachment.id : sanitized
+        let existingExtension = URL(fileURLWithPath: baseName).pathExtension
 
-        if URL(fileURLWithPath: baseName).pathExtension.isEmpty,
+        if let data,
+           let detectedExtension = AttachmentFileSignature.fileExtension(for: data) {
+            if existingExtension.isEmpty {
+                return "\(baseName).\(detectedExtension)"
+            }
+            if !AttachmentFileSignature.matches(existingExtension, detectedExtension) {
+                let suffixLength = existingExtension.count + 1
+                let stem = String(baseName.dropLast(suffixLength))
+                return "\(stem).\(detectedExtension)"
+            }
+        }
+
+        if existingExtension.isEmpty,
            let fileExtension = attachment.fileExtension,
            !fileExtension.isEmpty {
             return "\(baseName).\(fileExtension)"

@@ -22,6 +22,10 @@ import Foundation
 
 // MARK: - Sync Manifest
 
+enum MarkdownRenderer {
+    static let currentVersion = "markdown-v2"
+}
+
 struct SyncManifest: Codable {
     static let filename = "AppleNotesExportSyncWatermark.json"
     static let currentVersion = 1
@@ -39,6 +43,14 @@ struct SyncManifest: Codable {
         var exportFingerprint: String?
         /// Stable note-content fingerprint used when Apple Notes timestamps are unreliable.
         var contentFingerprint: String?
+        /// Markdown renderer used for the most recent successful Markdown export.
+        var markdownRendererVersion: String?
+    }
+
+    struct MarkdownRendererRefreshPlanItem: Equatable {
+        let noteId: String
+        let noteTitle: String
+        let exportedPath: String
     }
 
     // MARK: - Factory
@@ -76,7 +88,8 @@ struct SyncManifest: Codable {
         from notes: [NotesNote],
         exportFingerprint: String? = nil,
         contentFingerprint: (NotesNote) -> String? = { _ in nil },
-        acceptedContentFingerprints: (NotesNote) -> Set<String>? = { _ in nil }
+        acceptedContentFingerprints: (NotesNote) -> Set<String>? = { _ in nil },
+        markdownRendererRefreshVersion: String? = nil
     ) -> [NotesNote] {
         return notes.filter { note in
             guard let entry = self.notes[note.id] else {
@@ -95,6 +108,10 @@ struct SyncManifest: Codable {
             } else if entry.contentFingerprint != currentContentFingerprint {
                 return true
             }
+            if let markdownRendererRefreshVersion,
+               entry.markdownRendererVersion != markdownRendererRefreshVersion {
+                return true
+            }
             // Note exists — check if it's been modified since last export
             // Use 0.001s tolerance to avoid floating-point precision false positives
             return note.modificationDate.timeIntervalSince1970 - entry.modificationDate.timeIntervalSince1970 > 0.001
@@ -106,6 +123,25 @@ struct SyncManifest: Codable {
         return notes[noteId]?.exportedPath
     }
 
+    func markdownRendererRefreshPlan(
+        from notes: [NotesNote],
+        currentVersion: String
+    ) -> [MarkdownRendererRefreshPlanItem] {
+        notes.compactMap { note in
+            guard let entry = self.notes[note.id],
+                  entry.markdownRendererVersion != currentVersion else {
+                return nil
+            }
+            return MarkdownRendererRefreshPlanItem(
+                noteId: note.id,
+                noteTitle: note.title,
+                exportedPath: entry.exportedPath
+            )
+        }.sorted { lhs, rhs in
+            lhs.exportedPath.localizedStandardCompare(rhs.exportedPath) == .orderedAscending
+        }
+    }
+
     // MARK: - Mutation
 
     /// Record a successfully exported note
@@ -115,14 +151,16 @@ struct SyncManifest: Codable {
         exportedPath: String,
         attachmentPaths: [String] = [],
         exportFingerprint: String? = nil,
-        contentFingerprint: String? = nil
+        contentFingerprint: String? = nil,
+        markdownRendererVersion: String? = nil
     ) {
         notes[noteId] = SyncedNoteEntry(
             modificationDate: modificationDate,
             exportedPath: exportedPath,
             attachmentPaths: attachmentPaths,
             exportFingerprint: exportFingerprint,
-            contentFingerprint: contentFingerprint
+            contentFingerprint: contentFingerprint,
+            markdownRendererVersion: markdownRendererVersion
         )
         lastSync = Date()
     }

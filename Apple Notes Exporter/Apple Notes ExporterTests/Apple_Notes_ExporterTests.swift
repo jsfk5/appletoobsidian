@@ -21,6 +21,7 @@
 import XCTest
 import SQLite3
 import CryptoKit
+import Darwin
 @testable import Apple_Notes_Exporter
 
 final class Apple_Notes_ExporterTests: XCTestCase {
@@ -295,6 +296,461 @@ final class Apple_Notes_ExporterTests: XCTestCase {
 
         XCTAssertNil(LockedNotePlaceholder.html(for: note))
         XCTAssertNil(LockedNotePlaceholder.markdown(for: note))
+    }
+
+    func testModernNotesDatabaseUsesRecognizedHandwritingTitleColumn() throws {
+        let fixtureURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("AppleNotesTitleColumns-\(UUID().uuidString)", isDirectory: true)
+        let databaseURL = fixtureURL.appendingPathComponent("NoteStore.sqlite")
+        try FileManager.default.createDirectory(at: fixtureURL, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: fixtureURL) }
+
+        try createModernNotesDatabase(
+            at: databaseURL,
+            additionalSQL: """
+            INSERT INTO ZICCLOUDSYNCINGOBJECT
+                (Z_PK, Z_ENT, ZIDENTIFIER, ZTITLE, ZTITLE1, ZTITLE2,
+                 ZCREATIONDATE1, ZMODIFICATIONDATE1, ZFOLDER, ZACCOUNT2, ZMARKEDFORDELETION)
+            VALUES
+                (1, 1, 'typed', 'Legacy typed', 'Older typed', 'Typed title', 10, 20, 50, 100, 0),
+                (2, 1, 'handwritten', NULL, 'Recognized handwriting', NULL, 11, 21, 50, 100, 0),
+                (3, 1, 'legacy-title', 'Legacy title', NULL, NULL, 12, 22, 50, 100, 0),
+                (4, 1, 'pure-ink', NULL, NULL, NULL, 13, 23, 50, 100, 0);
+            """
+        )
+
+        let db = try XCTUnwrap(ane_open(databaseURL.path))
+        defer { ane_close(db) }
+
+        var count = 0
+        let notes = try XCTUnwrap(ane_fetch_notes(db, &count))
+        defer { ane_free_notes(notes, count) }
+
+        let notesByPrimaryKey = (0..<count).map { index in
+            let note = notes[index]
+            return (note.pk, note.title.map { String(cString: $0) })
+        }.sorted { $0.0 < $1.0 }
+
+        XCTAssertEqual(notesByPrimaryKey.count, 4)
+        XCTAssertEqual(notesByPrimaryKey[0].1, "Typed title")
+        XCTAssertEqual(notesByPrimaryKey[1].1, "Recognized handwriting")
+        XCTAssertEqual(notesByPrimaryKey[2].1, "Legacy title")
+        XCTAssertNil(notesByPrimaryKey[3].1)
+    }
+
+    func testRecognizedTitleCorrectionTriggersOnlyAffectedIncrementalExport() throws {
+        let oldHandwritten = makeNote(
+            id: "handwritten",
+            title: NotesNote.fallbackTitle(for: "handwritten"),
+            plaintext: ""
+        )
+        let correctedHandwritten = makeNote(
+            id: "handwritten",
+            title: "Recognized handwriting",
+            plaintext: ""
+        )
+        let unchanged = makeNote(
+            id: "unchanged",
+            title: "Typed title",
+            plaintext: "Body"
+        )
+
+        var manifest = SyncManifest.empty()
+        for note in [oldHandwritten, unchanged] {
+            manifest.recordExport(
+                noteId: note.id,
+                modificationDate: note.modificationDate,
+                exportedPath: "iCloud/\(note.sanitizedFileName).md",
+                contentFingerprint: NoteContentFingerprint.value(for: note)
+            )
+        }
+
+        let notesNeedingExport = manifest.notesNeedingExport(
+            from: [correctedHandwritten, unchanged],
+            contentFingerprint: { NoteContentFingerprint.value(for: $0) }
+        )
+
+        XCTAssertEqual(notesNeedingExport.map(\.id), ["handwritten"])
+    }
+
+    func testGalleryChildWithoutMediaUsesOnMyMacFallbackImage() throws {
+        let fileManager = FileManager.default
+        let fixtureURL = fileManager.temporaryDirectory
+            .appendingPathComponent("AppleNotesGalleryFallback-\(UUID().uuidString)", isDirectory: true)
+        let databaseURL = fixtureURL.appendingPathComponent("NoteStore.sqlite")
+        let fallbackURL = fixtureURL
+            .appendingPathComponent("Library/Group Containers/group.com.apple.notes/Accounts/LocalAccount/FallbackImages", isDirectory: true)
+            .appendingPathComponent("gallery-child.jpg")
+        let expectedData = Data([0xFF, 0xD8, 0xFF, 0xD9])
+
+        try fileManager.createDirectory(at: fallbackURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try expectedData.write(to: fallbackURL)
+        defer { try? fileManager.removeItem(at: fixtureURL) }
+
+        try createModernNotesDatabase(
+            at: databaseURL,
+            additionalSQL: """
+            INSERT INTO ZICCLOUDSYNCINGOBJECT
+                (Z_PK, Z_ENT, ZIDENTIFIER, ZNAME, ZMARKEDFORDELETION)
+            VALUES (100, 3, 'LocalAccount', 'On My Mac', 0);
+
+            INSERT INTO ZICCLOUDSYNCINGOBJECT
+                (Z_PK, Z_ENT, ZIDENTIFIER, ZTITLE2, ZCREATIONDATE1,
+                 ZMODIFICATIONDATE1, ZFOLDER, ZACCOUNT2, ZMARKEDFORDELETION)
+            VALUES (200, 1, 'note-with-gallery', 'Gallery note', 10, 20, 50, 100, 0);
+
+            INSERT INTO ZICCLOUDSYNCINGOBJECT
+                (Z_PK, Z_ENT, ZIDENTIFIER, ZTYPEUTI, ZNOTE, ZMARKEDFORDELETION)
+            VALUES (300, 2, 'gallery-parent', 'com.apple.notes.gallery', 200, 0);
+
+            INSERT INTO ZICCLOUDSYNCINGOBJECT
+                (Z_PK, Z_ENT, ZIDENTIFIER, ZTYPEUTI, ZFILENAME, ZMEDIA,
+                 ZNOTE, ZPARENTATTACHMENT, ZMARKEDFORDELETION)
+            VALUES (301, 2, 'gallery-child', 'public.jpeg', NULL, NULL, 200, 300, 0);
+            """
+        )
+
+        let originalHome = getenv("HOME").map { String(cString: $0) }
+        XCTAssertEqual(setenv("HOME", fixtureURL.path, 1), 0)
+        defer {
+            if let originalHome {
+                setenv("HOME", originalHome, 1)
+            } else {
+                unsetenv("HOME")
+            }
+        }
+
+        let db = try XCTUnwrap(ane_open(databaseURL.path))
+        defer { ane_close(db) }
+        XCTAssertGreaterThanOrEqual(ane_prefetch_attachments(db), 2)
+
+        var count = 0
+        let children = try XCTUnwrap(ane_fetch_gallery_children(db, "gallery-parent", nil, &count))
+        defer { ane_free_gallery_children(children, count) }
+
+        XCTAssertEqual(count, 1)
+        let child = children[0]
+        XCTAssertEqual(child.identifier.map { String(cString: $0) }, "gallery-child")
+        XCTAssertEqual(child.filename.map { String(cString: $0) }, "gallery-child.jpg")
+        XCTAssertEqual(child.type_uti.map { String(cString: $0) }, "public.jpeg")
+        XCTAssertEqual(child.data_len, expectedData.count)
+        let actualData = child.data.map { Data(bytes: $0, count: child.data_len) }
+        XCTAssertEqual(actualData, expectedData)
+    }
+
+    @MainActor
+    func testGalleryChildrenExportAsSeparateObsidianEmbeds() async throws {
+        let fileManager = FileManager.default
+        let outputURL = fileManager.temporaryDirectory
+            .appendingPathComponent("AppleNotesGalleryExport-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: outputURL, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: outputURL) }
+
+        let repository = MockNotesRepository()
+        repository.mockGalleryChildren = [
+            GalleryChild(
+                id: "gallery-child-1",
+                data: Data([0xFF, 0xD8, 0x01, 0xD9]),
+                filename: "First Photo.jpg",
+                uti: "public.jpeg"
+            ),
+            GalleryChild(
+                id: "gallery-child-2",
+                data: Data([0x89, 0x50, 0x4E, 0x47]),
+                filename: "Second Photo.png",
+                uti: "public.png"
+            )
+        ]
+        let viewModel = ExportViewModel(repository: repository, databasePath: ":memory:")
+        let tracker = ExportProgressTracker()
+        let gallery = NotesAttachment(
+            id: "gallery-parent",
+            typeUTI: "com.apple.notes.gallery",
+            filename: nil
+        )
+
+        let attachmentPaths = try await viewModel.exportAttachmentsAndReturnPaths(
+            [gallery],
+            toDirectory: outputURL,
+            noteBaseName: "Gallery Note",
+            noteTitle: "Gallery Note",
+            noteCreationDate: Date(timeIntervalSince1970: 1_700_000_000),
+            noteModificationDate: Date(timeIntervalSince1970: 1_700_000_100),
+            tracker: tracker
+        )
+
+        let firstPath = "Gallery Note (Attachments)/First Photo.jpg"
+        let secondPath = "Gallery Note (Attachments)/Second Photo.png"
+        XCTAssertEqual(attachmentPaths[gallery.id], firstPath)
+        XCTAssertEqual(
+            attachmentPaths[GalleryAttachmentPaths.additionalPathKey(parentId: gallery.id, index: 1)],
+            secondPath
+        )
+        XCTAssertTrue(fileManager.fileExists(atPath: outputURL.appendingPathComponent(firstPath).path))
+        XCTAssertTrue(fileManager.fileExists(atPath: outputURL.appendingPathComponent(secondPath).path))
+        let stats = await tracker.getStats()
+        XCTAssertEqual(stats.failedAttachments, 0)
+
+        var sqlite: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(":memory:", &sqlite), SQLITE_OK)
+        let database = try XCTUnwrap(sqlite)
+        defer { sqlite3_close(database) }
+
+        let processedHTML = HTMLAttachmentProcessor(database: database).processHTML(
+            html: #"<html><body><span data-attachment-id="gallery-parent" data-attachment-type="com.apple.notes.gallery">￼</span></body></html>"#,
+            attachments: [gallery],
+            attachmentPaths: attachmentPaths,
+            embedImages: false,
+            linkEmbeddedImages: false
+        )
+        let markdown = makeNote(htmlBody: processedHTML, attachments: [gallery])
+            .toMarkdown(flavor: .obsidian)
+
+        XCTAssertTrue(markdown.contains("![[\(firstPath)]]"))
+        XCTAssertTrue(markdown.contains("![[\(secondPath)]]"))
+    }
+
+    @MainActor
+    func testDrawingFallbackUsesExtensionDetectedFromBytes() async throws {
+        let fileManager = FileManager.default
+        let outputURL = fileManager.temporaryDirectory
+            .appendingPathComponent("AppleNotesDrawingExport-\(UUID().uuidString)", isDirectory: true)
+        try fileManager.createDirectory(at: outputURL, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: outputURL) }
+
+        let pngData = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x01])
+        let repository = MockNotesRepository()
+        repository.mockAttachmentData = pngData
+        repository.mockAttachmentFilename = "drawing-fallback.jpg"
+        let viewModel = ExportViewModel(repository: repository, databasePath: ":memory:")
+        let tracker = ExportProgressTracker()
+        let drawing = NotesAttachment(
+            id: "drawing-fallback",
+            typeUTI: "com.apple.drawing.2",
+            filename: nil
+        )
+
+        let attachmentPaths = try await viewModel.exportAttachmentsAndReturnPaths(
+            [drawing],
+            toDirectory: outputURL,
+            noteBaseName: "Handwritten Note",
+            noteTitle: "Handwritten Note",
+            noteCreationDate: Date(timeIntervalSince1970: 1_700_000_000),
+            noteModificationDate: Date(timeIntervalSince1970: 1_700_000_100),
+            tracker: tracker
+        )
+
+        let expectedPath = "Handwritten Note (Attachments)/drawing-fallback.png"
+        XCTAssertEqual(attachmentPaths[drawing.id], expectedPath)
+        XCTAssertEqual(try Data(contentsOf: outputURL.appendingPathComponent(expectedPath)), pngData)
+        let stats = await tracker.getStats()
+        XCTAssertEqual(stats.failedAttachments, 0)
+    }
+
+    func testAttachmentFileSignaturePreservesJPEGExtensionAliases() {
+        let jpegData = Data([0xFF, 0xD8, 0xFF, 0xE0])
+
+        XCTAssertEqual(AttachmentFileSignature.fileExtension(for: jpegData), "jpg")
+        XCTAssertTrue(AttachmentFileSignature.matches("jpeg", "jpg"))
+        XCTAssertFalse(AttachmentFileSignature.matches("png", "jpg"))
+    }
+
+    func testNormalIncrementalSyncIgnoresRendererVersionUntilRefreshIsExplicit() {
+        let staleNote = makeNote(id: "stale-renderer", title: "Stale Renderer")
+        let currentNote = makeNote(id: "current-renderer", title: "Current Renderer")
+        var manifest = SyncManifest.empty()
+
+        manifest.recordExport(
+            noteId: staleNote.id,
+            modificationDate: staleNote.modificationDate,
+            exportedPath: "iCloud/Stale Renderer.md",
+            contentFingerprint: NoteContentFingerprint.value(for: staleNote)
+        )
+        manifest.recordExport(
+            noteId: currentNote.id,
+            modificationDate: currentNote.modificationDate,
+            exportedPath: "iCloud/Current Renderer.md",
+            contentFingerprint: NoteContentFingerprint.value(for: currentNote),
+            markdownRendererVersion: MarkdownRenderer.currentVersion
+        )
+
+        let normalSelection = manifest.notesNeedingExport(
+            from: [staleNote, currentNote],
+            contentFingerprint: { NoteContentFingerprint.value(for: $0) }
+        )
+        let refreshSelection = manifest.notesNeedingExport(
+            from: [staleNote, currentNote],
+            contentFingerprint: { NoteContentFingerprint.value(for: $0) },
+            markdownRendererRefreshVersion: MarkdownRenderer.currentVersion
+        )
+
+        XCTAssertTrue(normalSelection.isEmpty)
+        XCTAssertEqual(refreshSelection.map(\.id), [staleNote.id])
+    }
+
+    func testSuccessfulRendererRefreshSettlesToNormalAndRefreshNoOp() {
+        let note = makeNote(id: "refreshed-note", title: "Refreshed Note")
+        var manifest = SyncManifest.empty()
+        manifest.recordExport(
+            noteId: note.id,
+            modificationDate: note.modificationDate,
+            exportedPath: "iCloud/Refreshed Note.md",
+            contentFingerprint: NoteContentFingerprint.value(for: note),
+            markdownRendererVersion: MarkdownRenderer.currentVersion
+        )
+
+        let normalSelection = manifest.notesNeedingExport(
+            from: [note],
+            contentFingerprint: { NoteContentFingerprint.value(for: $0) }
+        )
+        let refreshSelection = manifest.notesNeedingExport(
+            from: [note],
+            contentFingerprint: { NoteContentFingerprint.value(for: $0) },
+            markdownRendererRefreshVersion: MarkdownRenderer.currentVersion
+        )
+
+        XCTAssertTrue(normalSelection.isEmpty)
+        XCTAssertTrue(refreshSelection.isEmpty)
+        XCTAssertEqual(
+            manifest.notes[note.id]?.markdownRendererVersion,
+            MarkdownRenderer.currentVersion
+        )
+    }
+
+    func testUnrecordedRendererRefreshRemainsEligibleAfterPartialSuccess() {
+        let successfulNote = makeNote(id: "successful-refresh", title: "Successful Refresh")
+        let failedOrCancelledNote = makeNote(id: "unfinished-refresh", title: "Unfinished Refresh")
+        var manifest = SyncManifest.empty()
+
+        for note in [successfulNote, failedOrCancelledNote] {
+            manifest.recordExport(
+                noteId: note.id,
+                modificationDate: note.modificationDate,
+                exportedPath: "iCloud/\(note.title).md",
+                contentFingerprint: NoteContentFingerprint.value(for: note)
+            )
+        }
+
+        manifest.recordExport(
+            noteId: successfulNote.id,
+            modificationDate: successfulNote.modificationDate,
+            exportedPath: "iCloud/Successful Refresh.md",
+            contentFingerprint: NoteContentFingerprint.value(for: successfulNote),
+            markdownRendererVersion: MarkdownRenderer.currentVersion
+        )
+
+        let remainingPlan = manifest.markdownRendererRefreshPlan(
+            from: [successfulNote, failedOrCancelledNote],
+            currentVersion: MarkdownRenderer.currentVersion
+        )
+
+        XCTAssertEqual(remainingPlan.map(\.noteId), [failedOrCancelledNote.id])
+        XCTAssertNil(manifest.notes[failedOrCancelledNote.id]?.markdownRendererVersion)
+    }
+
+    func testLegacyManifestWithoutRendererVersionRemainsReadableAndRefreshEligible() throws {
+        let json = """
+        {
+          "lastSync": 1700000100,
+          "notes": {
+            "legacy-note": {
+              "attachmentPaths": [],
+              "contentFingerprint": "fingerprint",
+              "exportedPath": "iCloud/Legacy Note.md",
+              "modificationDate": 1700000100
+            }
+          },
+          "version": 1
+        }
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .secondsSince1970
+        let manifest = try decoder.decode(SyncManifest.self, from: Data(json.utf8))
+        let note = makeNote(
+            id: "legacy-note",
+            title: "Legacy Note",
+            modificationDate: Date(timeIntervalSince1970: 1_700_000_100)
+        )
+
+        XCTAssertNil(manifest.notes[note.id]?.markdownRendererVersion)
+        XCTAssertEqual(
+            manifest.markdownRendererRefreshPlan(
+                from: [note],
+                currentVersion: MarkdownRenderer.currentVersion
+            ).map(\.exportedPath),
+            ["iCloud/Legacy Note.md"]
+        )
+    }
+
+    @MainActor
+    func testRendererDryRunPlanDoesNotWriteDeleteOrUpdateManifest() async throws {
+        let fileManager = FileManager.default
+        let outputURL = fileManager.temporaryDirectory
+            .appendingPathComponent("AppleNotesRendererDryRun-\(UUID().uuidString)", isDirectory: true)
+        let noteURL = outputURL.appendingPathComponent("iCloud/Legacy Note.md")
+        let orphanURL = outputURL.appendingPathComponent("iCloud/Orphan.md")
+        try fileManager.createDirectory(at: noteURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try "legacy markdown".write(to: noteURL, atomically: true, encoding: .utf8)
+        try "preserve me".write(to: orphanURL, atomically: true, encoding: .utf8)
+        defer { try? fileManager.removeItem(at: outputURL) }
+
+        let note = makeNote(id: "legacy-note", title: "Legacy Note")
+        var manifest = SyncManifest.empty()
+        manifest.recordExport(
+            noteId: note.id,
+            modificationDate: note.modificationDate,
+            exportedPath: "iCloud/Legacy Note.md",
+            contentFingerprint: NoteContentFingerprint.value(for: note)
+        )
+        try manifest.save(to: outputURL)
+        let manifestURL = outputURL.appendingPathComponent(SyncManifest.filename)
+        let manifestBefore = try Data(contentsOf: manifestURL)
+
+        let plan = try await ExportViewModel(repository: MockNotesRepository()).markdownRendererRefreshPlan(
+            for: [note],
+            outputURL: outputURL,
+            format: .markdown
+        )
+
+        XCTAssertEqual(plan.map(\.exportedPath), ["iCloud/Legacy Note.md"])
+        XCTAssertEqual(try Data(contentsOf: manifestURL), manifestBefore)
+        XCTAssertEqual(try String(contentsOf: noteURL, encoding: .utf8), "legacy markdown")
+        XCTAssertEqual(try String(contentsOf: orphanURL, encoding: .utf8), "preserve me")
+    }
+
+    func testLaunchOptionsParseExplicitRendererRefreshDryRun() throws {
+        let options = try XCTUnwrap(LaunchExportOptions.parse(arguments: [
+            "Apple Notes Exporter",
+            "--output", "/tmp/apple-notes-renderer-preview",
+            "--format", "markdown",
+            "--refresh-renderer",
+            "--dry-run"
+        ]))
+
+        XCTAssertTrue(options.incrementalSync)
+        XCTAssertTrue(options.refreshRenderer)
+        XCTAssertTrue(options.dryRun)
+        XCTAssertNil(options.obsidianInternalLinksInMarkdown)
+    }
+
+    func testLaunchOptionsParseExplicitObsidianLinkSetting() throws {
+        let enabled = try XCTUnwrap(LaunchExportOptions.parse(arguments: [
+            "Apple Notes Exporter",
+            "--output", "/tmp/apple-notes-obsidian-links",
+            "--format", "markdown",
+            "--incremental",
+            "--obsidian-links"
+        ]))
+        let disabled = try XCTUnwrap(LaunchExportOptions.parse(arguments: [
+            "Apple Notes Exporter",
+            "--output", "/tmp/apple-notes-plain-links",
+            "--format", "markdown",
+            "--incremental",
+            "--no-obsidian-links"
+        ]))
+
+        XCTAssertEqual(enabled.obsidianInternalLinksInMarkdown, true)
+        XCTAssertEqual(disabled.obsidianInternalLinksInMarkdown, false)
     }
 
     @MainActor
@@ -611,6 +1067,135 @@ final class Apple_Notes_ExporterTests: XCTestCase {
         XCTAssertFalse(markdown.contains("applenotes://show?identifier=x-coredata://ABCDEF-123456"))
     }
 
+    func testNoteHTMLGeneratorEscapesLiteralHTMLText() throws {
+        let text = #"<b>literal</b> & "quotes" 'single'"#
+        let html = generatedHTML(text: text, runs: [attributeRun(for: text)])
+
+        XCTAssertTrue(html.contains("&lt;b&gt;literal&lt;/b&gt; &amp; &quot;quotes&quot; &#39;single&#39;"))
+        XCTAssertFalse(html.contains("<b>literal</b>"))
+    }
+
+    func testNoteHTMLGeneratorEscapesLiteralHTMLInsideListItems() throws {
+        let text = #"<script>alert("not markup")</script>"#
+        var style = ParagraphStyle()
+        style.styleType = 102
+        style.indentAmount = 0
+        let html = generatedHTML(
+            text: text,
+            runs: [attributeRun(for: text, paragraphStyle: style)]
+        )
+
+        XCTAssertTrue(html.contains("&lt;script&gt;alert(&quot;not markup&quot;)&lt;/script&gt;"))
+        XCTAssertFalse(html.contains("<script>"))
+    }
+
+    func testEscapedListTextSurvivesObsidianMarkdownConversion() throws {
+        let text = #"<script>alert("not markup")</script>"#
+        var style = ParagraphStyle()
+        style.styleType = 102
+        style.indentAmount = 0
+        let html = generatedHTML(
+            text: text,
+            runs: [attributeRun(for: text, paragraphStyle: style)]
+        )
+        let markdown = makeNote(htmlBody: html).toMarkdown(flavor: .obsidian)
+
+        XCTAssertTrue(markdown.contains(#"1. &lt;script&gt;alert("not markup")&lt;/script&gt;"#))
+        XCTAssertFalse(markdown.contains("<script>"))
+    }
+
+    func testNoteHTMLGeneratorEscapesAllowedLinkHref() throws {
+        let text = "Search"
+        let href = " HTTPS://example.com/search?q=a&label='quoted' "
+        let html = generatedHTML(
+            text: text,
+            runs: [attributeRun(for: text, link: href)]
+        )
+
+        XCTAssertTrue(html.contains("href='HTTPS://example.com/search?q=a&amp;label=&#39;quoted&#39;'"))
+        XCTAssertFalse(html.contains("href=' HTTPS://"))
+    }
+
+    func testNoteHTMLGeneratorAllowsSupportedLinkSchemes() throws {
+        let supportedLinks = [
+            "http://example.com",
+            "https://example.com",
+            "mailto:person@example.com",
+            "applenotes://note/NOTE-ID",
+            "tel:+15555550123",
+            "sms:+15555550123",
+            "ftp://example.com/file.txt"
+        ]
+
+        for href in supportedLinks {
+            let text = "Supported link"
+            let html = generatedHTML(
+                text: text,
+                runs: [attributeRun(for: text, link: href)]
+            )
+
+            XCTAssertTrue(html.contains("href='\(href)'"), "Expected allowed href for \(href)")
+        }
+    }
+
+    func testNoteHTMLGeneratorBlocksUnsafeLinkSchemes() throws {
+        let unsafeLinks = [
+            "javascript:alert(1)",
+            " data:text/html,<script>alert(1)</script> ",
+            "vbscript:msgbox(1)",
+            "file:///tmp/private"
+        ]
+
+        for href in unsafeLinks {
+            let text = "Unsafe link"
+            let html = generatedHTML(
+                text: text,
+                runs: [attributeRun(for: text, link: href)]
+            )
+
+            XCTAssertTrue(html.contains("href='#'"), "Expected blocked href for \(href)")
+            XCTAssertFalse(html.lowercased().contains("href='javascript:"))
+            XCTAssertFalse(html.lowercased().contains("href='data:"))
+            XCTAssertFalse(html.lowercased().contains("href='vbscript:"))
+            XCTAssertFalse(html.lowercased().contains("href='file:"))
+        }
+    }
+
+    func testBlockedLinkProducesInertObsidianMarkdownDestination() throws {
+        let text = "Unsafe link"
+        let html = generatedHTML(
+            text: text,
+            runs: [attributeRun(for: text, link: "javascript:alert(1)")]
+        )
+        let markdown = makeNote(htmlBody: html).toMarkdown(flavor: .obsidian)
+
+        XCTAssertTrue(markdown.contains("[Unsafe link](#)"))
+        XCTAssertFalse(markdown.lowercased().contains("javascript:"))
+    }
+
+    func testSanitizedAppleNotesLinkStillBecomesObsidianWikilink() throws {
+        let text = "Plateau note"
+        let href = "applenotes://show?identifier=x-coredata://ABCDEF-123456&mode=preview"
+        let html = generatedHTML(
+            text: text,
+            runs: [attributeRun(for: text, link: href)]
+        )
+        let target = NoteLinkTarget(
+            markdownPath: "../EndMyopia/Preventing The Bad Plateau.md",
+            obsidianReference: "iCloud/EndMyopia/Preventing The Bad Plateau",
+            title: "Preventing The Bad Plateau"
+        )
+        let note = makeNote(htmlBody: html)
+
+        XCTAssertTrue(html.contains("identifier=x-coredata://ABCDEF-123456&amp;mode=preview"))
+        XCTAssertTrue(
+            note.toMarkdown(
+                flavor: .obsidian,
+                noteLinkTargets: ["x-coredata://ABCDEF-123456": target]
+            ).contains("[[iCloud/EndMyopia/Preventing The Bad Plateau|Plateau note]]")
+        )
+    }
+
     func testAppleNotesChecklistStateIsPreservedInMarkdown() throws {
         let note = makeNote(
             htmlBody: """
@@ -627,6 +1212,246 @@ final class Apple_Notes_ExporterTests: XCTestCase {
 
         XCTAssertTrue(markdown.contains("- ☑ Export locked notes cleanly"))
         XCTAssertTrue(markdown.contains("- ☐ Add task-list syntax later"))
+    }
+
+    func testOrderedListNumbersItemsInSourceOrder() throws {
+        let note = makeNote(
+            htmlBody: """
+            <html><body>
+            <ol>
+            <li data-indent='0' data-list-type='102'>First</li>
+            <li data-indent='0' data-list-type='102'>Second</li>
+            <li data-indent='0' data-list-type='102'>Third</li>
+            </ol>
+            </body></html>
+            """
+        )
+
+        let markdown = note.toMarkdown(flavor: .obsidian)
+
+        XCTAssertEqual(listLines(in: markdown), ["1. First", "2. Second", "3. Third"])
+    }
+
+    func testNestedOrderedListsUseIndependentCounters() throws {
+        let note = makeNote(
+            htmlBody: """
+            <html><body>
+            <ol>
+            <li data-indent='0' data-list-type='102'>First parent</li>
+            <li data-indent='1' data-list-type='102'>First child</li>
+            <li data-indent='1' data-list-type='102'>Second child</li>
+            <li data-indent='0' data-list-type='102'>Second parent</li>
+            <li data-indent='1' data-list-type='102'>New first child</li>
+            </ol>
+            </body></html>
+            """
+        )
+
+        let markdown = note.toMarkdown(flavor: .obsidian)
+
+        XCTAssertEqual(
+            listLines(in: markdown),
+            [
+                "1. First parent",
+                "    1. First child",
+                "    2. Second child",
+                "2. Second parent",
+                "    1. New first child"
+            ]
+        )
+    }
+
+    func testSeparateOrderedListsRestartAtOne() throws {
+        let note = makeNote(
+            htmlBody: """
+            <html><body>
+            <ol>
+            <li data-indent='0' data-list-type='102'>First list item</li>
+            <li data-indent='0' data-list-type='102'>Second list item</li>
+            </ol>
+            Between lists<br>
+            <ol>
+            <li data-indent='0' data-list-type='102'>Restarted list item</li>
+            </ol>
+            </body></html>
+            """
+        )
+
+        let markdown = note.toMarkdown(flavor: .obsidian)
+
+        XCTAssertEqual(
+            listLines(in: markdown),
+            ["1. First list item", "2. Second list item", "1. Restarted list item"]
+        )
+        XCTAssertTrue(markdown.contains("Between lists"))
+    }
+
+    func testOrderedListPreservesInlineFormattingAndLinks() throws {
+        let note = makeNote(
+            htmlBody: """
+            <html><body>
+            <ol>
+            <li data-indent='0' data-list-type='102'>Read the <strong>guide</strong> at <a href='https://example.com'>example</a></li>
+            </ol>
+            </body></html>
+            """
+        )
+
+        let markdown = note.toMarkdown(flavor: .obsidian)
+
+        XCTAssertEqual(
+            listLines(in: markdown),
+            ["1. Read the **guide** at [example](https://example.com)"]
+        )
+    }
+
+    func testIndentedBulletListPreservesMarkersAndNesting() throws {
+        let note = makeNote(
+            htmlBody: """
+            <html><body>
+            <ul>
+            <li data-indent='0' data-list-type='100'>Parent bullet</li>
+            <li data-indent='1' data-list-type='100'>Child bullet</li>
+            <li data-indent='0' data-list-type='100'>Second parent bullet</li>
+            </ul>
+            </body></html>
+            """
+        )
+
+        let markdown = note.toMarkdown(flavor: .obsidian)
+
+        XCTAssertEqual(
+            listLines(in: markdown),
+            ["- Parent bullet", "    - Child bullet", "- Second parent bullet"]
+        )
+    }
+
+    func testNestedListTypeChangeDoesNotResetParentCounter() throws {
+        let note = makeNote(
+            htmlBody: """
+            <html><body>
+            <ol>
+            <li data-indent='0' data-list-type='102'>First parent</li>
+            <ol>
+            <li data-indent='1' data-list-type='102'>Numbered child</li>
+            </ol>
+            <ul>
+            <li data-indent='1' data-list-type='100'>Bullet child</li>
+            </ul>
+            <li data-indent='0' data-list-type='102'>Second parent</li>
+            </ol>
+            </body></html>
+            """
+        )
+
+        let markdown = note.toMarkdown(flavor: .obsidian)
+
+        XCTAssertEqual(
+            listLines(in: markdown),
+            [
+                "1. First parent",
+                "    1. Numbered child",
+                "    - Bullet child",
+                "2. Second parent"
+            ]
+        )
+    }
+
+    private func listLines(in markdown: String) -> [String] {
+        markdown.components(separatedBy: .newlines).filter { line in
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            return trimmed.range(of: #"^(?:-|\d+\.)\s"#, options: .regularExpression) != nil
+        }
+    }
+
+    private func createModernNotesDatabase(at databaseURL: URL, additionalSQL: String) throws {
+        var db: OpaquePointer?
+        guard sqlite3_open(databaseURL.path, &db) == SQLITE_OK, let db else {
+            throw NSError(domain: "AppleNotesExporterTests", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: "Could not create synthetic Notes database"
+            ])
+        }
+        defer { sqlite3_close(db) }
+
+        try executeSQL(
+            """
+            CREATE TABLE Z_PRIMARYKEY (Z_NAME TEXT, Z_ENT INTEGER);
+            INSERT INTO Z_PRIMARYKEY (Z_NAME, Z_ENT) VALUES
+                ('ICNote', 1),
+                ('ICAttachment', 2),
+                ('ICAccount', 3),
+                ('ICFolder', 4);
+
+            CREATE TABLE ZICNOTEDATA (ZNOTE INTEGER, ZDATA BLOB);
+
+            CREATE TABLE ZICCLOUDSYNCINGOBJECT (
+                Z_PK INTEGER PRIMARY KEY,
+                Z_ENT INTEGER,
+                ZIDENTIFIER TEXT,
+                ZNAME TEXT,
+                ZTITLE TEXT,
+                ZTITLE1 TEXT,
+                ZTITLE2 TEXT,
+                ZCREATIONDATE1 REAL,
+                ZMODIFICATIONDATE1 REAL,
+                ZFOLDER INTEGER,
+                ZOWNER INTEGER,
+                ZACCOUNT2 INTEGER,
+                ZPARENT INTEGER,
+                ZMARKEDFORDELETION INTEGER,
+                ZSERVERRECORDDATA BLOB,
+                ZTYPEUTI TEXT,
+                ZFILENAME TEXT,
+                ZMEDIA INTEGER,
+                ZNOTE INTEGER,
+                ZPARENTATTACHMENT INTEGER,
+                ZATTACHMENT INTEGER,
+                ZMERGEABLEDATA BLOB,
+                ZALTTEXT TEXT,
+                ZURLSTRING TEXT,
+                ZTOKENCONTENTIDENTIFIER TEXT,
+                ZFALLBACKIMAGEGENERATION TEXT,
+                ZFALLBACKPDFGENERATION TEXT,
+                ZHEIGHT INTEGER,
+                ZWIDTH INTEGER
+            );
+            """,
+            in: db
+        )
+        try executeSQL(additionalSQL, in: db)
+    }
+
+    private func executeSQL(_ sql: String, in db: OpaquePointer) throws {
+        var errorMessage: UnsafeMutablePointer<CChar>?
+        let result = sqlite3_exec(db, sql, nil, nil, &errorMessage)
+        defer { sqlite3_free(errorMessage) }
+        guard result == SQLITE_OK else {
+            let message = errorMessage.map { String(cString: $0) } ?? "Unknown SQLite error"
+            throw NSError(domain: "AppleNotesExporterTests", code: Int(result), userInfo: [
+                NSLocalizedDescriptionKey: message
+            ])
+        }
+    }
+
+    private func generatedHTML(text: String, runs: [AttributeRun]) -> String {
+        var note = Note()
+        note.noteText = text
+        note.attributeRun = runs
+        return NoteHTMLGenerator(database: nil).generateHTML(from: note)
+    }
+
+    private func attributeRun(
+        for text: String,
+        link: String = "",
+        paragraphStyle: ParagraphStyle? = nil
+    ) -> AttributeRun {
+        var run = AttributeRun()
+        run.length = Int32(text.utf16.count)
+        run.link = link
+        if let paragraphStyle {
+            run.paragraphStyle = paragraphStyle
+        }
+        return run
     }
 
     private func makeNote(

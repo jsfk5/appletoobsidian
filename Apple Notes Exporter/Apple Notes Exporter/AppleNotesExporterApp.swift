@@ -81,16 +81,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-fileprivate struct LaunchExportOptions {
+struct LaunchExportOptions {
     let outputURL: URL
     let format: ExportFormat
     let incrementalSync: Bool
     let includeAttachments: Bool
+    let obsidianInternalLinksInMarkdown: Bool?
     let quitWhenDone: Bool
+    let refreshRenderer: Bool
+    let dryRun: Bool
 
     static func parse(arguments: [String]) -> LaunchExportOptions? {
         let hasExportFlag = arguments.contains("--export")
-        let hasExportOptions = arguments.contains("--output") || arguments.contains("--format") || arguments.contains("--incremental")
+        let hasExportOptions = arguments.contains("--output")
+            || arguments.contains("--format")
+            || arguments.contains("--incremental")
+            || arguments.contains("--obsidian-links")
+            || arguments.contains("--no-obsidian-links")
+            || arguments.contains("--refresh-renderer")
+            || arguments.contains("--dry-run")
         guard hasExportFlag || hasExportOptions else {
             return nil
         }
@@ -99,7 +108,10 @@ fileprivate struct LaunchExportOptions {
         var format: ExportFormat = .markdown
         var incrementalSync = false
         var includeAttachments = true
+        var obsidianInternalLinksInMarkdown: Bool?
         var quitWhenDone = true
+        var refreshRenderer = false
+        var dryRun = false
 
         var index = 1
         while index < arguments.count {
@@ -123,8 +135,16 @@ fileprivate struct LaunchExportOptions {
                 includeAttachments = true
             case "--no-attachments":
                 includeAttachments = false
+            case "--obsidian-links":
+                obsidianInternalLinksInMarkdown = true
+            case "--no-obsidian-links":
+                obsidianInternalLinksInMarkdown = false
             case "--keep-open":
                 quitWhenDone = false
+            case "--refresh-renderer":
+                refreshRenderer = true
+            case "--dry-run":
+                dryRun = true
             default:
                 break
             }
@@ -139,9 +159,12 @@ fileprivate struct LaunchExportOptions {
         return LaunchExportOptions(
             outputURL: URL(fileURLWithPath: NSString(string: outputPath).expandingTildeInPath),
             format: format,
-            incrementalSync: incrementalSync,
+            incrementalSync: incrementalSync || refreshRenderer,
             includeAttachments: includeAttachments,
-            quitWhenDone: quitWhenDone
+            obsidianInternalLinksInMarkdown: obsidianInternalLinksInMarkdown,
+            quitWhenDone: quitWhenDone,
+            refreshRenderer: refreshRenderer,
+            dryRun: dryRun
         )
     }
 
@@ -283,15 +306,44 @@ class AppleNotesExporterState: ObservableObject {
             return
         }
 
+        if options.dryRun {
+            guard options.refreshRenderer else {
+                writeStandardError("Apple Notes Exporter: --dry-run currently requires --refresh-renderer.")
+                finishLaunchExport(options, status: 1)
+                return
+            }
+
+            do {
+                let plan = try await exportViewModel.markdownRendererRefreshPlan(
+                    for: notes,
+                    outputURL: options.outputURL,
+                    format: options.format
+                )
+                print("Apple Notes Exporter: renderer refresh dry run found \(plan.count) eligible note\(plan.count == 1 ? "" : "s").")
+                for item in plan {
+                    print("Apple Notes Exporter: would refresh: \(item.exportedPath)")
+                }
+                finishLaunchExport(options, status: 0)
+            } catch {
+                writeStandardError("Apple Notes Exporter: renderer refresh dry run failed. \(error.localizedDescription)")
+                finishLaunchExport(options, status: 1)
+            }
+            return
+        }
+
         exportViewModel.configurations.incrementalSync = options.incrementalSync
         exportViewModel.configurations.includeAttachments = options.includeAttachments
+        if let obsidianInternalLinksInMarkdown = options.obsidianInternalLinksInMarkdown {
+            exportViewModel.configurations.obsidianInternalLinksInMarkdown = obsidianInternalLinksInMarkdown
+        }
         exportViewModel.saveConfigurations()
 
         await exportViewModel.exportNotes(
             notes,
             toDirectory: options.outputURL,
             format: options.format,
-            includeAttachments: options.includeAttachments
+            includeAttachments: options.includeAttachments,
+            refreshMarkdownRenderer: options.refreshRenderer
         )
 
         switch exportViewModel.exportState {

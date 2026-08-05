@@ -93,7 +93,7 @@ class NoteHTMLGenerator {
     // MARK: - HTML Generation (from protobuf Note)
 
     /// Generates HTML from a protobuf Note
-    private func generateHTML(from note: Note) -> String {
+    func generateHTML(from note: Note) -> String {
         var html = "<html><body>"
 
         let text = note.noteText
@@ -142,7 +142,7 @@ class NoteHTMLGenerator {
             }
 
             let utf16Slice = utf16View[startIndex..<endIndex]
-            var segment = String(utf16Slice) ?? ""
+            let segment = String(utf16Slice) ?? ""
 
             // Determine list item properties
             var isListItem = false
@@ -218,7 +218,8 @@ class NoteHTMLGenerator {
 
             // Handle list items
             if isListItem {
-                var styledText = segment
+                let renderedSegment = run.hasAttachmentInfo ? segment : segment.htmlEscaped
+                var styledText = renderedSegment
                 var openTags: [String] = []
                 var closeTags: [String] = []
 
@@ -226,7 +227,7 @@ class NoteHTMLGenerator {
                 if run.fontWeight == 2 || run.fontWeight == 3 { openTags.append("<i>"); closeTags.insert("</i>", at: 0) }
                 if run.underlined != 0 { openTags.append("<u>"); closeTags.insert("</u>", at: 0) }
                 if run.strikethrough != 0 { openTags.append("<s>"); closeTags.insert("</s>", at: 0) }
-                if !run.link.isEmpty { openTags.append("<a href='\(run.link)'>"); closeTags.insert("</a>", at: 0) }
+                if !run.link.isEmpty { openTags.append("<a href='\(sanitizeLinkHref(run.link))'>"); closeTags.insert("</a>", at: 0) }
 
                 if run.hasAttachmentInfo {
                     styledText = processAttachmentRun(run: run)
@@ -284,13 +285,16 @@ class NoteHTMLGenerator {
                 if run.fontWeight == 2 || run.fontWeight == 3 { openTags.append("<i>"); closeTags.insert("</i>", at: 0) }
                 if run.underlined != 0 { openTags.append("<u>"); closeTags.insert("</u>", at: 0) }
                 if run.strikethrough != 0 { openTags.append("<s>"); closeTags.insert("</s>", at: 0) }
-                if !run.link.isEmpty { openTags.append("<a href='\(run.link)'>"); closeTags.insert("</a>", at: 0) }
+                if !run.link.isEmpty { openTags.append("<a href='\(sanitizeLinkHref(run.link))'>"); closeTags.insert("</a>", at: 0) }
 
+                let renderedSegment: String
                 if run.hasAttachmentInfo {
-                    segment = processAttachmentRun(run: run)
+                    renderedSegment = processAttachmentRun(run: run)
+                } else {
+                    renderedSegment = segment.htmlEscaped
                 }
 
-                html += openTags.joined() + segment.replacingOccurrences(of: "\n", with: "<br>") + closeTags.joined()
+                html += openTags.joined() + renderedSegment.replacingOccurrences(of: "\n", with: "<br>") + closeTags.joined()
             }
 
             currentPos = endPos
@@ -337,6 +341,26 @@ class NoteHTMLGenerator {
         }
         // All other file attachments
         return "<span data-attachment-id=\"\(attachmentId)\" data-attachment-type=\"\(typeUti)\">[File: \(typeUti)]</span>"
+    }
+
+    /// Allow known non-active schemes and replace everything else with an inert target.
+    private func sanitizeLinkHref(_ link: String) -> String {
+        let trimmed = link.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lowercased = trimmed.lowercased()
+        let allowedPrefixes = [
+            "http://",
+            "https://",
+            "mailto:",
+            "applenotes:",
+            "tel:",
+            "sms:",
+            "ftp://"
+        ]
+
+        guard allowedPrefixes.contains(where: lowercased.hasPrefix) else {
+            return "#"
+        }
+        return trimmed.htmlEscaped
     }
 
     /// Query inline attachment text using the C parser API

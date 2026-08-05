@@ -71,6 +71,50 @@ When a runtime change does require replacing the installed app:
 
 For sync behavior changes, also verify that deleted notes, moved notes, and attachment folders are still scoped to the selected export root.
 
+## Isolated Validation Candidates
+
+Do not give a temporary candidate the same identity as the stable app in `/Applications`. Two differently signed ad-hoc builds can share a visible name and bundle identifier while macOS treats their Full Disk Access grants differently. Authorizing one can leave the other unable to open `NoteStore.sqlite`.
+
+Build a separately identified candidate with:
+
+```sh
+./Apple\ Notes\ Exporter/build-validation-candidate.sh
+```
+
+The script:
+
+- builds the current source as `Apple to Obsidian Candidate`
+- uses candidate bundle identifier `com.jsfk5.appletoobsidian.candidate`
+- keeps the compiled production product name unchanged for package compatibility
+- writes the copied app to the ignored `Apple Notes Exporter/Products/` folder by default
+- refuses to write a candidate into `/Applications`
+- verifies the bundle metadata and deep code signature before succeeding
+
+Pass a different output directory as the only argument when needed:
+
+```sh
+./Apple\ Notes\ Exporter/build-validation-candidate.sh "/path/to/candidates"
+```
+
+The candidate still requires its own Full Disk Access grant before reading Apple Notes. Run it only against an isolated export root. Do not replace the stable app until the candidate passes automated tests, a real database-open check, the required human fixtures, and a follow-up incremental no-op.
+
+The separate candidate identity also starts with fresh saved UI settings. Do not use its GUI Export/Sync button for validation. Pass every output-affecting command-line setting explicitly so the candidate matches the copied manifest.
+
+For a one-shot command-line candidate check, launch the app through LaunchServices:
+
+```sh
+open -W -n "/path/to/Apple to Obsidian Candidate build N.app" --args \
+  --output "/path/to/isolated/Apple Notes" \
+  --format markdown \
+  --incremental \
+  --attachments \
+  --obsidian-links
+```
+
+Use `--no-obsidian-links` only when the copied export manifest was created without Obsidian wikilink conversion. A mismatch changes the Markdown export fingerprint and deliberately makes existing notes eligible for re-export.
+
+Do not use `launchctl submit` for one-shot validation. A submitted executable can inherit keepalive behavior and relaunch after every successful exit.
+
 ## Stable Signing
 
 A stable signing identity may reduce permission churn compared with repeated ad-hoc signed replacement builds. It is still not a guarantee that macOS will preserve Full Disk Access after every replacement.

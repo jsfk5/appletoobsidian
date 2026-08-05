@@ -215,6 +215,59 @@ struct NotesAttachment: NotesItem {
     }
 }
 
+enum AttachmentFileSignature {
+    static func fileExtension(for data: Data) -> String? {
+        let header = Array(data.prefix(8))
+
+        if header.starts(with: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) {
+            return "png"
+        }
+        if header.starts(with: [0xFF, 0xD8, 0xFF]) {
+            return "jpg"
+        }
+        if header.starts(with: [0x47, 0x49, 0x46, 0x38, 0x37, 0x61]) ||
+            header.starts(with: [0x47, 0x49, 0x46, 0x38, 0x39, 0x61]) {
+            return "gif"
+        }
+        if header.starts(with: [0x25, 0x50, 0x44, 0x46, 0x2D]) {
+            return "pdf"
+        }
+
+        return nil
+    }
+
+    static func matches(_ lhs: String, _ rhs: String) -> Bool {
+        let normalizedLHS = lhs.lowercased()
+        let normalizedRHS = rhs.lowercased()
+        if normalizedLHS == normalizedRHS {
+            return true
+        }
+        return Set([normalizedLHS, normalizedRHS]) == Set(["jpg", "jpeg"])
+    }
+}
+
+enum GalleryAttachmentPaths {
+    private static let keyMarker = "#gallery-child-"
+
+    static func additionalPathKey(parentId: String, index: Int) -> String {
+        "\(parentId)\(keyMarker)\(index)"
+    }
+
+    static func orderedPaths(parentId: String, in attachmentPaths: [String: String]) -> [String] {
+        var paths: [String] = []
+        if let primaryPath = attachmentPaths[parentId] {
+            paths.append(primaryPath)
+        }
+
+        var index = 1
+        while let path = attachmentPaths[additionalPathKey(parentId: parentId, index: index)] {
+            paths.append(path)
+            index += 1
+        }
+        return paths
+    }
+}
+
 // MARK: - Hierarchical Structure
 
 /// Represents a hierarchical tree structure for displaying accounts/folders/notes
