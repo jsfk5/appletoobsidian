@@ -2549,14 +2549,27 @@ class ExportViewModel: ObservableObject {
     }
 
     private func isURLInsideDirectory(_ url: URL, directoryURL: URL) -> Bool {
-        let baseComponents = directoryURL.standardizedFileURL.pathComponents
-        let targetComponents = url.standardizedFileURL.pathComponents
+        func pathIsInside(_ targetURL: URL, directory baseURL: URL) -> Bool {
+            let baseComponents = baseURL.standardizedFileURL.pathComponents
+            let targetComponents = targetURL.standardizedFileURL.pathComponents
 
-        guard targetComponents.count > baseComponents.count else {
+            guard targetComponents.count > baseComponents.count else {
+                return false
+            }
+
+            return zip(baseComponents, targetComponents).allSatisfy(==)
+        }
+
+        let standardizedBaseURL = directoryURL.standardizedFileURL
+        let standardizedTargetURL = url.standardizedFileURL
+        guard pathIsInside(standardizedTargetURL, directory: standardizedBaseURL) else {
             return false
         }
 
-        return zip(baseComponents, targetComponents).allSatisfy(==)
+        return pathIsInside(
+            standardizedTargetURL.resolvingSymlinksInPath(),
+            directory: standardizedBaseURL.resolvingSymlinksInPath()
+        )
     }
 
     private func removeDirectoryIfEmpty(_ directoryURL: URL, stoppingAt rootURL: URL? = nil) throws {
