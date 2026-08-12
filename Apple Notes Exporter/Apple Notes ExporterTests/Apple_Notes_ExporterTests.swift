@@ -797,6 +797,42 @@ final class Apple_Notes_ExporterTests: XCTestCase {
     }
 
     @MainActor
+    func testStaleManifestCleanupDoesNotFollowSymlinkOutsideOutputRoot() throws {
+        let fileManager = FileManager.default
+        let baseURL = fileManager.temporaryDirectory
+            .appendingPathComponent("AppleNotesExporterSymlinkGuard-\(UUID().uuidString)", isDirectory: true)
+        let outputRootURL = baseURL.appendingPathComponent("Export", isDirectory: true)
+        let insideFolderURL = outputRootURL.appendingPathComponent("iCloud", isDirectory: true)
+        let outsideFolderURL = baseURL.appendingPathComponent("Outside", isDirectory: true)
+        let outsideFileURL = outsideFolderURL.appendingPathComponent("outside.md")
+        let symlinkURL = insideFolderURL.appendingPathComponent("Linked")
+
+        try fileManager.createDirectory(at: insideFolderURL, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: outsideFolderURL, withIntermediateDirectories: true)
+        try "outside".write(to: outsideFileURL, atomically: true, encoding: .utf8)
+        try fileManager.createSymbolicLink(at: symlinkURL, withDestinationURL: outsideFolderURL)
+        defer { try? fileManager.removeItem(at: baseURL) }
+
+        var manifest = SyncManifest.empty()
+        manifest.recordExport(
+            noteId: "stale-symlink-note",
+            modificationDate: Date(timeIntervalSince1970: 1_700_000_000),
+            exportedPath: "iCloud/Linked/outside.md"
+        )
+
+        let removedCount = try ExportViewModel().removeManifestEntriesNotInCurrentExportSet(
+            from: &manifest,
+            currentNoteIDs: [],
+            outputRootURL: outputRootURL
+        )
+
+        XCTAssertEqual(removedCount, 1)
+        XCTAssertTrue(fileManager.fileExists(atPath: outsideFileURL.path))
+        XCTAssertTrue(fileManager.fileExists(atPath: symlinkURL.path))
+        XCTAssertTrue(manifest.notes.isEmpty)
+    }
+
+    @MainActor
     func testStaleManifestCleanupPrunesDeletedNoteArtifactsAndPreservesCurrentOnes() throws {
         let fileManager = FileManager.default
         let baseURL = fileManager.temporaryDirectory
