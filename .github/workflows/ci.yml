@@ -65,5 +65,13 @@ jobs:
           test -d "$RUNNER_TEMP/apple-notes-exporter-deriveddata/Build/Products/Debug/Apple Notes Exporter.app"
           test -d "$RUNNER_TEMP/apple-notes-exporter-deriveddata/Build/Products/Debug/Apple Notes Exporter.app/Contents/PlugIns/Apple Notes ExporterTests.xctest"
 
+      - name: Run compiled unit tests
+        run: |
+          products="$RUNNER_TEMP/apple-notes-exporter-deriveddata/Build/Products/Debug"
+          env \
+            DYLD_LIBRARY_PATH="$products/Apple Notes Exporter.app/Contents/MacOS" \
+            "$DEVELOPER_DIR/usr/bin/xctest" \
+            "$products/Apple Notes Exporter.app/Contents/PlugIns/Apple Notes ExporterTests.xctest"
+
       - name: Confirm build did not modify tracked files
         run: git diff --exit-code
