@@ -22,6 +22,13 @@ import Foundation
 
 // MARK: - Sync Manifest
 
+enum ExportPathIdentity {
+    // Conservatively avoid aliases even when exporting onto a case-sensitive volume.
+    static func key(_ path: String) -> String {
+        (path as NSString).standardizingPath.precomposedStringWithCanonicalMapping.lowercased()
+    }
+}
+
 enum MarkdownRenderer {
     static let currentVersion = "markdown-v2"
 }
@@ -33,6 +40,7 @@ struct SyncManifest: Codable {
     var version: Int = SyncManifest.currentVersion
     var lastSync: Date
     var notes: [String: SyncedNoteEntry]
+    var collisionLinkRefreshPending: Bool?
 
     struct SyncedNoteEntry: Codable {
         var modificationDate: Date
@@ -83,6 +91,11 @@ struct SyncManifest: Codable {
 
     // MARK: - Sync Logic
 
+    var collidingNoteIDs: Set<String> {
+        let groups = Swift.Dictionary(grouping: notes.keys) { ExportPathIdentity.key(notes[$0]!.exportedPath) }
+        return Set(groups.values.filter { $0.count > 1 }.flatMap { $0 })
+    }
+
     /// Determine which notes need to be exported (new or modified since last sync)
     func notesNeedingExport(
         from notes: [NotesNote],
@@ -91,7 +104,9 @@ struct SyncManifest: Codable {
         acceptedContentFingerprints: (NotesNote) -> Set<String>? = { _ in nil },
         markdownRendererRefreshVersion: String? = nil
     ) -> [NotesNote] {
+        let collisions = collidingNoteIDs
         return notes.filter { note in
+            if collisions.contains(note.id) { return true }
             guard let entry = self.notes[note.id] else {
                 // Note not in manifest — it's new
                 return true

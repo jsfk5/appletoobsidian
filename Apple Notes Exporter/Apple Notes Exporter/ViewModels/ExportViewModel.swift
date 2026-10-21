@@ -125,12 +125,13 @@ struct ExportStatistics: Equatable {
     var completionDate: Date = Date()
 }
 
-private struct ExportPlanEntry: Sendable {
+struct ExportPlanEntry: Sendable {
     let folderURL: URL
     let fileURL: URL
     let uniqueBaseName: String
     let noteIdentifier: String?
     let noteTitle: String
+    var deferStaleCleanup = false
 }
 
 private struct StaleExportArtifacts: Sendable {
@@ -468,9 +469,22 @@ class ExportViewModel: ObservableObject {
                 )
                 let filteredIDs = Set(filteredNotes.map(\.id))
                 filteredNotes.append(contentsOf: missingArtifactNotes.filter { !filteredIDs.contains($0.id) })
+                let repairingLinks = format == .markdown &&
+                    (!manifest.collidingNoteIDs.isEmpty || manifest.collisionLinkRefreshPending == true)
+                if repairingLinks {
+                    // Other notes can link to either relocated owner; refresh their destinations too.
+                    filteredNotes = exportableNotes
+                    log("Repairing shared export paths: refreshing Markdown notes and internal links")
+                }
                 notesToExport = filteredNotes
                 // Start from existing manifest so we preserve entries for unchanged notes
-                syncTracker = SyncManifestTracker(manifest: manifest)
+                var repairManifest = manifest
+                if repairingLinks { repairManifest.collisionLinkRefreshPending = true }
+                for noteID in manifest.collidingNoteIDs {
+                    // Keep failed repairs eligible after another owner successfully relocates.
+                    repairManifest.notes[noteID]?.contentFingerprint = nil
+                }
+                syncTracker = SyncManifestTracker(manifest: repairManifest)
                 if notesToExport.isEmpty {
                     var updatedManifest = manifest
                     let removedStaleExports = try removeManifestEntriesNotInCurrentExportSet(
@@ -586,6 +600,9 @@ class ExportViewModel: ObservableObject {
             // Save sync manifest if incremental sync is enabled
             if let syncTracker = syncTracker {
                 var finalManifest = await syncTracker.getManifest()
+                if failedNotesCount == 0 && failedAttachmentsCount == 0 {
+                    finalManifest.collisionLinkRefreshPending = nil
+                }
                 let removedStaleExports = try removeManifestEntriesNotInCurrentExportSet(
                     from: &finalManifest,
                     currentNoteIDs: currentExportNoteIDs,
@@ -966,7 +983,7 @@ class ExportViewModel: ObservableObject {
             }
         }
 
-        let staleArtifacts = staleExportArtifacts(
+        let staleArtifacts = planEntry?.deferStaleCleanup == true ? nil : staleExportArtifacts(
             previousEntry: previousSyncEntry,
             plannedFileURL: fileURL,
             noteDirectory: directory,
@@ -1997,8 +2014,8 @@ class ExportViewModel: ObservableObject {
     ) -> String {
         let initialFilename = "\(baseName).\(`extension`)"
         let initialPath = directory.appendingPathComponent(initialFilename).path
-        if !FileManager.default.fileExists(atPath: initialPath) && !reservedPaths.contains(initialPath) {
-            reservedPaths.insert(initialPath)
+        if !FileManager.default.fileExists(atPath: initialPath) && !reservedPaths.contains(ExportPathIdentity.key(initialPath)) {
+            reservedPaths.insert(ExportPathIdentity.key(initialPath))
             return initialFilename
         }
 
@@ -2007,21 +2024,21 @@ class ExportViewModel: ObservableObject {
             let uniqueFilename = "\(baseName) (\(counter)).\(`extension`)"
             let uniquePath = directory.appendingPathComponent(uniqueFilename).path
 
-            if !FileManager.default.fileExists(atPath: uniquePath) && !reservedPaths.contains(uniquePath) {
-                reservedPaths.insert(uniquePath)
+            if !FileManager.default.fileExists(atPath: uniquePath) && !reservedPaths.contains(ExportPathIdentity.key(uniquePath)) {
+                reservedPaths.insert(ExportPathIdentity.key(uniquePath))
                 return uniqueFilename
             }
 
             counter += 1
             if counter > 10000 {
                 let fallback = "\(baseName)_\(UUID().uuidString).\(`extension`)"
-                reservedPaths.insert(directory.appendingPathComponent(fallback).path)
+                reservedPaths.insert(ExportPathIdentity.key(directory.appendingPathComponent(fallback).path))
                 return fallback
             }
         }
     }
 
-    private func buildExportPlan(
+    func buildExportPlan(
         for notesWithPaths: [(note: NotesNote, folderURL: URL)],
         format: ExportFormat,
         rootURL: URL,
@@ -2029,14 +2046,20 @@ class ExportViewModel: ObservableObject {
         isSync: Bool
     ) -> [String: ExportPlanEntry] {
         var exportPlan: [String: ExportPlanEntry] = [:]
-        var reservedPaths: Set<String> = []
+        // Reserve manifest-owned paths even when their notes are unchanged or processed later.
+        let manifestPaths = Set((syncManifest?.notes.values.map {
+            ExportPathIdentity.key(rootURL.appendingPathComponent($0.exportedPath).path)
+        }) ?? [])
+        var reservedPaths = manifestPaths
+        let collisions = syncManifest?.collidingNoteIDs ?? []
 
         for noteWithPath in notesWithPaths {
             let note = noteWithPath.note
             let directory = noteWithPath.folderURL
-            let planEntry: ExportPlanEntry
+            var planEntry: ExportPlanEntry
 
             if let overridePath = syncManifest?.existingPath(for: note.id),
+               !collisions.contains(note.id),
                shouldReuseManifestPath(
                 overridePath,
                 for: note,
@@ -2044,7 +2067,7 @@ class ExportViewModel: ObservableObject {
                 rootURL: rootURL
                ) {
                 let fileURL = rootURL.appendingPathComponent(overridePath)
-                reservedPaths.insert(fileURL.path)
+                reservedPaths.insert(ExportPathIdentity.key(fileURL.path))
                 planEntry = ExportPlanEntry(
                     folderURL: directory,
                     fileURL: fileURL,
@@ -2061,8 +2084,10 @@ class ExportViewModel: ObservableObject {
                     baseName: baseFilename,
                     format: format,
                     inDirectory: directory
-                   ) {
-                    reservedPaths.insert(existingSyncFileURL.path)
+                   ),
+                   !collisions.contains(note.id),
+                   !reservedPaths.contains(ExportPathIdentity.key(existingSyncFileURL.path)) {
+                    reservedPaths.insert(ExportPathIdentity.key(existingSyncFileURL.path))
                     planEntry = ExportPlanEntry(
                         folderURL: directory,
                         fileURL: existingSyncFileURL,
@@ -2088,13 +2113,14 @@ class ExportViewModel: ObservableObject {
                 }
             }
 
+            planEntry.deferStaleCleanup = collisions.contains(note.id)
             exportPlan[note.id] = planEntry
         }
 
         return exportPlan
     }
 
-    private func noteLinkTargets(
+    func noteLinkTargets(
         for sourceNote: NotesNote,
         rootURL: URL,
         exportPlan: [String: ExportPlanEntry]
@@ -2381,7 +2407,7 @@ class ExportViewModel: ObservableObject {
                 .flatMap { _, entry in
                     [entry.exportedPath] + entry.attachmentPaths
                 }
-                .compactMap { outputURL(forManifestPath: $0, inside: outputRootURL)?.standardizedFileURL.path }
+                .compactMap { outputURL(forManifestPath: $0, inside: outputRootURL).map { ExportPathIdentity.key($0.path) } }
         )
 
         let staleNoteIDs = manifest.notes.keys.filter { !currentNoteIDs.contains($0) }
@@ -2397,9 +2423,9 @@ class ExportViewModel: ObservableObject {
                 manifest.notes.removeValue(forKey: noteID)
                 continue
             }
-            let filePath = fileURL.standardizedFileURL.path
+            let filePath = ExportPathIdentity.key(fileURL.path)
             if !protectedPaths.contains(filePath),
-               fileManager.fileExists(atPath: filePath) {
+               fileManager.fileExists(atPath: fileURL.path) {
                 try? fileManager.removeItem(at: fileURL)
                 try removeDirectoryIfEmpty(fileURL.deletingLastPathComponent(), stoppingAt: outputRootURL)
             }
@@ -2409,7 +2435,7 @@ class ExportViewModel: ObservableObject {
                     continue
                 }
                 let standardizedAttachmentPath = attachmentURL.standardizedFileURL.path
-                guard !protectedPaths.contains(standardizedAttachmentPath) else {
+                guard !protectedPaths.contains(ExportPathIdentity.key(standardizedAttachmentPath)) else {
                     continue
                 }
 
@@ -2432,21 +2458,21 @@ class ExportViewModel: ObservableObject {
         let fileManager = FileManager.default
         let outputRootURL = outputRootURL.standardizedFileURL
         var protectedFilePaths: Set<String> = [
-            outputRootURL.appendingPathComponent(SyncManifest.filename).standardizedFileURL.path
+            ExportPathIdentity.key(outputRootURL.appendingPathComponent(SyncManifest.filename).path)
         ]
         var protectedAttachmentDirectoryPaths: Set<String> = []
 
         for entry in manifest.notes.values {
             if let exportedURL = outputURL(forManifestPath: entry.exportedPath, inside: outputRootURL) {
-                protectedFilePaths.insert(exportedURL.standardizedFileURL.path)
+                protectedFilePaths.insert(ExportPathIdentity.key(exportedURL.path))
             }
 
             for attachmentPath in entry.attachmentPaths {
                 guard let attachmentURL = outputURL(forManifestPath: attachmentPath, inside: outputRootURL) else {
                     continue
                 }
-                protectedFilePaths.insert(attachmentURL.standardizedFileURL.path)
-                protectedAttachmentDirectoryPaths.insert(attachmentURL.deletingLastPathComponent().standardizedFileURL.path)
+                protectedFilePaths.insert(ExportPathIdentity.key(attachmentURL.path))
+                protectedAttachmentDirectoryPaths.insert(ExportPathIdentity.key(attachmentURL.deletingLastPathComponent().path))
             }
         }
 
@@ -2470,7 +2496,7 @@ class ExportViewModel: ObservableObject {
             let resourceValues = try? standardizedURL.resourceValues(forKeys: [.isDirectoryKey])
             if resourceValues?.isDirectory == true {
                 if isExporterAttachmentDirectoryName(standardizedURL.lastPathComponent),
-                   !protectedAttachmentDirectoryPaths.contains(standardizedURL.path) {
+                   !protectedAttachmentDirectoryPaths.contains(ExportPathIdentity.key(standardizedURL.path)) {
                     candidateAttachmentDirectories.append(standardizedURL)
                     enumerator.skipDescendants()
                 }
@@ -2478,7 +2504,7 @@ class ExportViewModel: ObservableObject {
             }
 
             if standardizedURL.pathExtension.localizedCaseInsensitiveCompare(ExportFormat.markdown.fileExtension) == .orderedSame,
-               !protectedFilePaths.contains(standardizedURL.path) {
+               !protectedFilePaths.contains(ExportPathIdentity.key(standardizedURL.path)) {
                 untrackedMarkdownFiles.append(standardizedURL)
             }
         }
@@ -2505,7 +2531,7 @@ class ExportViewModel: ObservableObject {
             }
 
             let siblingMarkdownPath = siblingMarkdownPath(forAttachmentDirectory: directoryURL)
-            guard siblingMarkdownPath == nil || !protectedMarkdownPaths.contains(siblingMarkdownPath!) else {
+            guard siblingMarkdownPath == nil || !protectedMarkdownPaths.contains(ExportPathIdentity.key(siblingMarkdownPath!)) else {
                 continue
             }
 

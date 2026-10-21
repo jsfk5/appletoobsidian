@@ -24,10 +24,205 @@ import CryptoKit
 import Darwin
 @testable import Apple_Notes_Exporter
 
+private final class CollisionTestRepository: MockNotesRepository {
+    var failingID: String?
+    var blockedOutput: URL?
+
+    override func generateHTML(forNoteId noteId: String) async throws -> String {
+        if noteId == failingID, let blockedOutput {
+            try FileManager.default.createDirectory(at: blockedOutput, withIntermediateDirectories: true)
+        }
+        if noteId == "source" {
+            return "<p>Mock HTML for note source</p><a href=\"applenotes://note/first\">First</a><a href=\"applenotes://note/second\">Second</a>"
+        }
+        return try await super.generateHTML(forNoteId: noteId)
+    }
+}
+
 final class Apple_Notes_ExporterTests: XCTestCase {
+
+    @MainActor
+    func testNewDuplicateCannotClaimExistingNotesExport() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = makeNote(id: "original", title: "Shared Title")
+        let added = makeNote(id: "added", title: "Shared Title")
+        let originalURL = root.appendingPathComponent("Shared Title.md")
+        try "original body".write(to: originalURL, atomically: true, encoding: .utf8)
+        var manifest = SyncManifest.empty()
+        manifest.recordExport(noteId: original.id, modificationDate: original.modificationDate,
+                              exportedPath: "Shared Title.md", contentFingerprint: NoteContentFingerprint.value(for: original))
+        let model = ExportViewModel(repository: MockNotesRepository())
+        model.configurations.addDateToFilename = false
+        for notes in [[added, original], [original, added]] {
+            let plan = model.buildExportPlan(for: notes.map { (note: $0, folderURL: root) },
+                                            format: .markdown, rootURL: root, syncManifest: manifest, isSync: true)
+            XCTAssertEqual(plan[original.id]?.fileURL, originalURL)
+            XCTAssertNotEqual(plan[original.id]?.fileURL, plan[added.id]?.fileURL)
+            XCTAssertNotEqual(plan[original.id]?.uniqueBaseName, plan[added.id]?.uniqueBaseName)
+        }
+        XCTAssertEqual(try String(contentsOf: originalURL, encoding: .utf8), "original body")
+    }
+
+    @MainActor
+    func testDuplicatePlansKeepBodiesAttachmentsLinksAndIncrementalPathsSeparate() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let notes = [makeNote(id: "first", title: "Duplicate", plaintext: "First body"),
+                     makeNote(id: "second", title: "Duplicate", plaintext: "Second body")]
+        let repository = MockNotesRepository()
+        let model = ExportViewModel(repository: repository, databasePath: ":memory:")
+        model.configurations.addDateToFilename = false
+        let plan = model.buildExportPlan(for: notes.map { (note: $0, folderURL: root) },
+                                        format: .markdown, rootURL: root, syncManifest: nil, isSync: true)
+        var manifest = SyncManifest.empty()
+        for note in notes {
+            let entry = try XCTUnwrap(plan[note.id])
+            try note.plaintext.write(to: entry.fileURL, atomically: true, encoding: .utf8)
+            repository.mockAttachmentData = Data(note.id.utf8)
+            let paths = try await model.exportAttachmentsAndReturnPaths(
+                [NotesAttachment(id: note.id, typeUTI: "public.data", filename: "file.bin")],
+                toDirectory: root, noteBaseName: entry.uniqueBaseName, noteTitle: note.title,
+                noteCreationDate: note.creationDate, noteModificationDate: note.modificationDate,
+                tracker: ExportProgressTracker())
+            let attachmentPath = try XCTUnwrap(paths[note.id])
+            XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(attachmentPath)), Data(note.id.utf8))
+            manifest.recordExport(noteId: note.id, modificationDate: note.modificationDate,
+                                  exportedPath: entry.fileURL.lastPathComponent, attachmentPaths: [attachmentPath],
+                                  contentFingerprint: NoteContentFingerprint.value(for: note))
+        }
+        let repeatPlan = model.buildExportPlan(for: notes.reversed().map { (note: $0, folderURL: root) },
+                                              format: .markdown, rootURL: root, syncManifest: manifest, isSync: true)
+        for note in notes {
+            XCTAssertEqual(repeatPlan[note.id]?.fileURL, plan[note.id]?.fileURL)
+            XCTAssertEqual(try String(contentsOf: XCTUnwrap(plan[note.id]?.fileURL), encoding: .utf8), note.plaintext)
+        }
+        XCTAssertTrue(manifest.notesNeedingExport(from: notes, contentFingerprint: { NoteContentFingerprint.value(for: $0) }).isEmpty)
+        let links = model.noteLinkTargets(for: notes[0], rootURL: root, exportPlan: repeatPlan)
+        XCTAssertEqual(links[notes[1].id]?.obsidianReference, plan[notes[1].id]?.uniqueBaseName)
+        XCTAssertEqual(try model.removeManifestEntriesNotInCurrentExportSet(
+            from: &manifest, currentNoteIDs: [notes[1].id], outputRootURL: root), 1)
+        XCTAssertEqual(try String(contentsOf: XCTUnwrap(plan[notes[1].id]?.fileURL), encoding: .utf8), notes[1].plaintext)
+        let survivorAttachment = try XCTUnwrap(manifest.notes[notes[1].id]?.attachmentPaths.first)
+        XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(survivorAttachment)), Data(notes[1].id.utf8))
+    }
+
+    @MainActor
+    func testMovedOrRenamedNoteCannotTakeAnotherNotesPath() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let resident = makeNote(id: "resident", title: "Destination")
+        let changed = makeNote(id: "changed", title: "Destination")
+        let model = ExportViewModel(repository: MockNotesRepository(), databasePath: ":memory:")
+        model.configurations.addDateToFilename = false
+        // Also reserve the resident's path when its file needs to be recreated.
+        for existingFile in [false, true] {
+            if existingFile {
+                try "resident".write(to: root.appendingPathComponent("Destination.md"), atomically: true, encoding: .utf8)
+            }
+            for priorPath in ["Old Title.md", "Old Folder/Destination.md"] {
+                var manifest = SyncManifest.empty()
+                for (note, path) in [(resident, "Destination.md"), (changed, priorPath)] {
+                    manifest.recordExport(noteId: note.id, modificationDate: note.modificationDate, exportedPath: path)
+                }
+                let plan = model.buildExportPlan(for: [changed, resident].map { (note: $0, folderURL: root) },
+                                                format: .markdown, rootURL: root, syncManifest: manifest, isSync: true)
+                XCTAssertEqual(plan[resident.id]?.fileURL.lastPathComponent, "Destination.md")
+                XCTAssertEqual(plan[changed.id]?.fileURL.lastPathComponent, "Destination (2).md")
+            }
+        }
+    }
 
     override func setUpWithError() throws {
         // Put setup code here. This method is called before the invocation of each test method in the class.
+    }
+
+    @MainActor
+    func testCaseAndUnicodeAliasesReceiveSeparateExportPaths() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let model = ExportViewModel(repository: MockNotesRepository(), databasePath: ":memory:")
+        model.configurations = .default
+        for titles in [["Same", "same"], ["Caf\u{e9}", "Cafe\u{301}"]] {
+            let notes = titles.enumerated().map { makeNote(id: "note-\($0.offset)", title: $0.element) }
+            let plan = model.buildExportPlan(for: notes.map { (note: $0, folderURL: root) },
+                                            format: .markdown, rootURL: root, syncManifest: nil, isSync: true)
+            XCTAssertEqual(Set(plan.values.map { ExportPathIdentity.key($0.fileURL.path) }).count, 2)
+            var manifest = SyncManifest.empty()
+            for note in notes {
+                manifest.recordExport(noteId: note.id, modificationDate: note.modificationDate,
+                                      exportedPath: note.title + ".md", contentFingerprint: NoteContentFingerprint.value(for: note))
+            }
+            XCTAssertEqual(manifest.collidingNoteIDs, Set(notes.map(\.id)))
+            XCTAssertEqual(manifest.notesNeedingExport(from: notes, contentFingerprint: { NoteContentFingerprint.value(for: $0) }).count, 2)
+        }
+    }
+
+    @MainActor
+    func testLegacyCollisionRepairThroughFullExportAndNoOpIncludingFailure() async throws {
+        for failRepair in [false, true] {
+            let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            let repository = CollisionTestRepository()
+            repository.mockAccounts = [NotesAccount(id: "account-1", name: "Test", identifier: "test", accountType: .local)]
+            repository.mockFolders = [NotesFolder(id: "folder-1", name: "Folder", parentId: nil, accountId: "account-1")]
+            repository.mockAttachmentData = Data("attachment".utf8)
+            let notes = ["first", "second", "source"].map {
+                makeNote(id: $0, title: $0.capitalized, attachments: [NotesAttachment(id: $0, typeUTI: "public.data", filename: "test.bin")])
+            }
+            let model = ExportViewModel(repository: repository, databasePath: ":memory:")
+            model.configurations = .default
+            model.configurations.incrementalSync = true
+            model.configurations.obsidianInternalLinksInMarkdown = true
+            await model.exportNotes(notes, toDirectory: root, format: .markdown)
+            var manifest = try XCTUnwrap(SyncManifest.load(from: root))
+            let shared = try XCTUnwrap(manifest.notes["first"])
+            manifest.notes["second"]?.exportedPath = shared.exportedPath
+            manifest.notes["second"]?.attachmentPaths = shared.attachmentPaths
+            try manifest.save(to: root)
+            repository.failingID = failRepair ? "second" : nil
+            repository.blockedOutput = root.appendingPathComponent(shared.exportedPath)
+                .deletingLastPathComponent().appendingPathComponent("Second (2).md")
+            await model.exportNotes(notes, toDirectory: root, format: .markdown)
+            if failRepair {
+                guard case .completed(let failedStats) = model.exportState else { return XCTFail("Expected failed-note summary") }
+                XCTAssertEqual(failedStats.failedNotes, 1)
+                XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(shared.exportedPath).path))
+                for path in shared.attachmentPaths {
+                    XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent(path).path))
+                }
+                repository.failingID = nil
+                try FileManager.default.removeItem(at: XCTUnwrap(repository.blockedOutput))
+                await model.exportNotes(notes, toDirectory: root, format: .markdown)
+            }
+            manifest = try XCTUnwrap(SyncManifest.load(from: root))
+            XCTAssertEqual(manifest.notes.count, 3)
+            XCTAssertTrue(manifest.collidingNoteIDs.isEmpty)
+            XCTAssertNil(manifest.collisionLinkRefreshPending)
+            let sourcePath = try XCTUnwrap(manifest.notes["source"]?.exportedPath)
+            let sourceBody = try String(contentsOf: root.appendingPathComponent(sourcePath), encoding: .utf8)
+            for id in ["first", "second"] {
+                let target = try XCTUnwrap(manifest.notes[id]?.exportedPath)
+                XCTAssertTrue(sourceBody.contains(String(target.dropLast(3))))
+            }
+            for note in notes {
+                let entry = try XCTUnwrap(manifest.notes[note.id])
+                let body = try String(contentsOf: root.appendingPathComponent(entry.exportedPath), encoding: .utf8)
+                XCTAssertTrue(body.contains("Mock HTML for note \(note.id)"))
+                XCTAssertEqual(entry.attachmentPaths.count, 1)
+                for path in entry.attachmentPaths {
+                    XCTAssertEqual(try Data(contentsOf: root.appendingPathComponent(path)), repository.mockAttachmentData)
+                }
+            }
+            let pathsBefore = manifest.notes.mapValues(\.exportedPath)
+            await model.exportNotes(notes, toDirectory: root, format: .markdown)
+            guard case .completed(let stats) = model.exportState else { return XCTFail("Expected completed export") }
+            XCTAssertEqual(stats.successfulNotes, 0)
+            XCTAssertEqual(try XCTUnwrap(SyncManifest.load(from: root)).notes.mapValues(\.exportedPath), pathsBefore)
+        }
     }
 
     override func tearDownWithError() throws {
