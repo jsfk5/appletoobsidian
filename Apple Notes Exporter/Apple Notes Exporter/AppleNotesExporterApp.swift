@@ -75,9 +75,38 @@ extension Scene {
     }
 }
 
-class AppDelegate: NSObject, NSApplicationDelegate {    
+@MainActor
+class AppDelegate: NSObject, NSApplicationDelegate {
+    private var didStartLaunchExport = false
+    private var isRunningLaunchExport = false
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        startLaunchExport(arguments: ProcessInfo.processInfo.arguments) { options in
+            let state = AppleNotesExporterState(
+                notesViewModel: NotesViewModel(),
+                exportViewModel: ExportViewModel()
+            )
+            await state.runLaunchExport(options)
+        }
+    }
+
+    // CLI startup must not depend on a SwiftUI window appearing or becoming active.
+    func startLaunchExport(
+        arguments: [String],
+        run: @escaping @MainActor (LaunchExportOptions) async -> Void
+    ) {
+        guard !didStartLaunchExport,
+              let options = LaunchExportOptions.parse(arguments: arguments) else { return }
+        didStartLaunchExport = true
+        isRunningLaunchExport = true
+        Task { @MainActor in
+            await run(options)
+            self.isRunningLaunchExport = false
+        }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
-        return true
+        return !isRunningLaunchExport
     }
 }
 
@@ -385,7 +414,6 @@ struct Apple_Notes_ExporterApp: App {
     // New ViewModels
     @StateObject private var notesViewModel = NotesViewModel()
     @StateObject private var exportViewModel = ExportViewModel()
-    @State private var didRunLaunchExport = false
 
     // Legacy compatibility state
     @ObservedObject var sharedState: AppleNotesExporterState
@@ -411,16 +439,9 @@ struct Apple_Notes_ExporterApp: App {
 
     var body: some Scene {
         WindowGroup(id: "main") {
-            if let launchExportOptions {
+            if launchExportOptions != nil {
                 SwiftUI.Color.clear
                     .frame(width: 1, height: 1)
-                    .onAppear {
-                        guard !didRunLaunchExport else { return }
-                        didRunLaunchExport = true
-                        Task {
-                            await sharedState.runLaunchExport(launchExportOptions)
-                        }
-                    }
             } else {
                 AppleNotesExporterView(sharedState: sharedState)
                     .environmentObject(notesViewModel)

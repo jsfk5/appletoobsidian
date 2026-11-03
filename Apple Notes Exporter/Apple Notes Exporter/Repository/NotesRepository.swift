@@ -67,6 +67,7 @@ enum RepositoryError: Error, LocalizedError {
     case itemNotFound(String)
     case attachmentNotFound(String)
     case decodingError(String)
+    case inventoryReadFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -80,6 +81,8 @@ enum RepositoryError: Error, LocalizedError {
             return "Attachment '\(id)' was not found or could not be retrieved."
         case .decodingError(let details):
             return "Failed to decode data from database: \(details)"
+        case .inventoryReadFailed(let collection):
+            return "Could not completely read \(collection) from Apple Notes. Export was stopped to protect existing files. Try again; if this persists, the database may be unavailable or incompatible."
         }
     }
 }
@@ -126,8 +129,8 @@ class DatabaseNotesRepository: NotesRepository, @unchecked Sendable {
                 defer { ane_close(db) }
 
                 var count: Int = 0
-                guard let raw = ane_fetch_accounts(db, &count), count > 0 else {
-                    continuation.resume(returning: [])
+                guard let raw = ane_fetch_accounts(db, &count) else {
+                    continuation.resume(throwing: RepositoryError.inventoryReadFailed("accounts"))
                     return
                 }
                 defer { ane_free_accounts(raw, count) }
@@ -177,8 +180,8 @@ class DatabaseNotesRepository: NotesRepository, @unchecked Sendable {
                 defer { ane_close(db) }
 
                 var count: Int = 0
-                guard let raw = ane_fetch_folders(db, &count), count > 0 else {
-                    continuation.resume(returning: [])
+                guard let raw = ane_fetch_folders(db, &count) else {
+                    continuation.resume(throwing: RepositoryError.inventoryReadFailed("folders"))
                     return
                 }
                 defer { ane_free_folders(raw, count) }
@@ -216,8 +219,8 @@ class DatabaseNotesRepository: NotesRepository, @unchecked Sendable {
                 defer { ane_close(db) }
 
                 var count: Int = 0
-                guard let raw = ane_fetch_notes(db, &count), count > 0 else {
-                    continuation.resume(returning: [])
+                guard let raw = ane_fetch_notes(db, &count) else {
+                    continuation.resume(throwing: RepositoryError.inventoryReadFailed("notes"))
                     return
                 }
                 defer { ane_free_notes(raw, count) }

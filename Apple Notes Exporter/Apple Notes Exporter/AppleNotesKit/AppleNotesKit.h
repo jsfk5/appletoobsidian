@@ -180,7 +180,12 @@ int ane_is_valid(const ane_db *db);
 /**
  * Fetch all accounts. Caller owns the returned array.
  * Sets *count to the number of results.
- * Returns NULL if no accounts found or on error.
+ * Returns NULL on error; an empty successful result is an owned array.
+ */
+/* Inventory fetch contract (accounts, folders, notes and date ranges):
+ * NULL means failure; count is reset to zero and partial results are freed.
+ * Success, including an empty result, returns an owned array that must be freed.
+ * Callers must not treat failure as an empty inventory for mirror cleanup.
  */
 ane_account *ane_fetch_accounts(ane_db *db, size_t *count);
 

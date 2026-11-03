@@ -395,6 +395,8 @@ class ExportViewModel: ObservableObject {
         let startTime = Date()
 
         do {
+            try ExportWriteBoundary.validate(outputURL, root: outputURL)
+            try ExportWriteBoundary.validate(outputURL.appendingPathComponent(SyncManifest.filename), root: outputURL)
             if refreshMarkdownRenderer && format != .markdown {
                 throw ExportError.rendererRefreshRequiresMarkdown
             }
@@ -420,6 +422,15 @@ class ExportViewModel: ObservableObject {
             // Incremental sync: load existing manifest and filter to new/changed notes
             let isSync = configurations.incrementalSync
             let existingManifest = isSync ? SyncManifest.load(from: outputURL) : nil
+            // Reject malformed records before planning, including records for deleted notes.
+            if let existingManifest {
+                for entry in existingManifest.notes.values {
+                    for path in [entry.exportedPath] + entry.attachmentPaths
+                    where path.split(separator: "/").contains("..") {
+                        throw ExportWriteBoundary.UnsafePath()
+                    }
+                }
+            }
             if refreshMarkdownRenderer && existingManifest == nil {
                 throw ExportError.rendererRefreshRequiresManifest
             }
@@ -541,10 +552,12 @@ class ExportViewModel: ObservableObject {
             // Create all directory structure upfront
             for (accountName, folders) in hierarchy {
                 let accountURL = outputURL.appendingPathComponent(sanitizeFilename(accountName))
+                try ExportWriteBoundary.validate(accountURL, root: outputURL)
                 try FileManager.default.createDirectory(at: accountURL, withIntermediateDirectories: true)
 
                 for (folderPath, _) in folders {
                     let folderURL = accountURL.appendingPathComponent(folderPath)
+                    try ExportWriteBoundary.validate(folderURL, root: outputURL)
                     try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
                 }
             }
@@ -844,6 +857,7 @@ class ExportViewModel: ObservableObject {
 
             try await withThrowingTaskGroup(of: Void.self) { group in
                 group.addTask {
+                    try ExportWriteBoundary.validate(fileURL, root: outputURL)
                     try await concatenated.print(to: fileURL, configuration: pdfConfiguration)
                 }
                 group.addTask {
@@ -854,6 +868,7 @@ class ExportViewModel: ObservableObject {
                 group.cancelAll()
             }
         } else {
+            try ExportWriteBoundary.validate(fileURL, root: outputURL)
             try concatenated.write(to: fileURL, atomically: true, encoding: .utf8)
         }
 
@@ -949,6 +964,7 @@ class ExportViewModel: ObservableObject {
             // Sync mode: overwrite at previously exported path
             fileURL = outputRootURL.appendingPathComponent(relativePath)
             // Ensure parent directory exists (in case folder structure was deleted)
+            try ExportWriteBoundary.validate(fileURL, root: rootURL)
             try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             uniqueBaseName = fileURL.deletingPathExtension().lastPathComponent
         } else {
@@ -983,6 +999,7 @@ class ExportViewModel: ObservableObject {
             }
         }
 
+        try ExportWriteBoundary.validate(fileURL, root: rootURL)
         let staleArtifacts = planEntry?.deferStaleCleanup == true ? nil : staleExportArtifacts(
             previousEntry: previousSyncEntry,
             plannedFileURL: fileURL,
@@ -1003,7 +1020,8 @@ class ExportViewModel: ObservableObject {
                 noteTitle: note.title,
                 noteCreationDate: note.creationDate,
                 noteModificationDate: note.modificationDate,
-                tracker: tracker
+                tracker: tracker,
+                outputRootURL: rootURL
             )
         }
 
@@ -1042,6 +1060,7 @@ class ExportViewModel: ObservableObject {
             // HEIC conversion to JPEG helps, but timeout still needed for truly corrupted files
             try await withThrowingTaskGroup(of: Void.self) { group in
                 group.addTask {
+                    try ExportWriteBoundary.validate(fileURL, root: rootURL)
                     try await html.print(to: fileURL, configuration: pdfConfiguration)
                 }
 
@@ -1075,13 +1094,14 @@ class ExportViewModel: ObservableObject {
                 log("✓ Note unchanged: \(note.title)")
             } else {
                 // Write to file
+                try ExportWriteBoundary.validate(fileURL, root: rootURL)
                 try content.write(to: fileURL, atomically: true, encoding: .utf8)
                 log("✓ Exported note: \(note.title) -> \(fileURL.path)")
             }
         }
 
         // Set file timestamps to match note's creation and modification dates
-        try setFileTimestamps(fileURL, creationDate: note.creationDate, modificationDate: note.modificationDate)
+        try setFileTimestamps(fileURL, creationDate: note.creationDate, modificationDate: note.modificationDate, rootURL: rootURL)
 
         let attachmentRelPaths = attachmentPaths.values.map { path in
             // attachmentPaths values are relative to the note's directory, make them relative to root
@@ -1122,7 +1142,8 @@ class ExportViewModel: ObservableObject {
         noteTitle: String,
         noteCreationDate: Date,
         noteModificationDate: Date,
-        tracker: ExportProgressTracker
+        tracker: ExportProgressTracker,
+        outputRootURL: URL? = nil
     ) async throws -> [String: String] {
         var attachmentPaths: [String: String] = [:]
 
@@ -1149,7 +1170,9 @@ class ExportViewModel: ObservableObject {
         }
 
         // Create attachments subfolder using the unique note base name
+        let writeRoot = outputRootURL ?? directory
         let attachmentsURL = directory.appendingPathComponent("\(noteBaseName) (Attachments)")
+        try ExportWriteBoundary.validate(attachmentsURL, root: writeRoot)
         try FileManager.default.createDirectory(at: attachmentsURL, withIntermediateDirectories: true)
 
         // Track used filenames to handle collisions
@@ -1196,11 +1219,13 @@ class ExportViewModel: ObservableObject {
                         }
 
                         let fileURL = attachmentsURL.appendingPathComponent(finalFilename)
-                        try child.data.write(to: fileURL)
+                        try ExportWriteBoundary.validate(fileURL, root: writeRoot)
+                        try child.data.write(to: fileURL, options: .atomic)
                         try setFileTimestamps(
                             fileURL,
                             creationDate: noteCreationDate,
-                            modificationDate: noteModificationDate
+                            modificationDate: noteModificationDate,
+                            rootURL: writeRoot
                         )
 
                         let relativePath = "\(noteBaseName) (Attachments)/\(finalFilename)"
@@ -1254,10 +1279,11 @@ class ExportViewModel: ObservableObject {
                 let fileURL = attachmentsURL.appendingPathComponent(finalFilename)
 
                 // Write attachment to disk
-                try data.write(to: fileURL)
+                try ExportWriteBoundary.validate(fileURL, root: writeRoot)
+                try data.write(to: fileURL, options: .atomic)
 
                 // Set attachment timestamps to match note's dates
-                try setFileTimestamps(fileURL, creationDate: noteCreationDate, modificationDate: noteModificationDate)
+                try setFileTimestamps(fileURL, creationDate: noteCreationDate, modificationDate: noteModificationDate, rootURL: writeRoot)
 
                 log("✓ Exported attachment: \(finalFilename) for note '\(noteTitle)'")
 
@@ -1300,7 +1326,7 @@ class ExportViewModel: ObservableObject {
 
         // Set attachments folder timestamps to match note's dates
         if !fileAttachments.isEmpty {
-            try setFileTimestamps(attachmentsURL, creationDate: noteCreationDate, modificationDate: noteModificationDate)
+            try setFileTimestamps(attachmentsURL, creationDate: noteCreationDate, modificationDate: noteModificationDate, rootURL: writeRoot)
         }
 
         return attachmentPaths
@@ -1314,7 +1340,8 @@ class ExportViewModel: ObservableObject {
         noteTitle: String,
         noteCreationDate: Date,
         noteModificationDate: Date,
-        tracker: ExportProgressTracker
+        tracker: ExportProgressTracker,
+        outputRootURL: URL? = nil
     ) async throws {
         // Filter out non-file attachments (inline content embedded in note)
         // Note: com.apple.paper, com.apple.drawing, and com.apple.drawing.2 are NOT filtered
@@ -1339,7 +1366,9 @@ class ExportViewModel: ObservableObject {
         }
 
         // Create attachments subfolder using the unique note base name
+        let writeRoot = outputRootURL ?? directory
         let attachmentsURL = directory.appendingPathComponent("\(noteBaseName) (Attachments)")
+        try ExportWriteBoundary.validate(attachmentsURL, root: writeRoot)
         try FileManager.default.createDirectory(at: attachmentsURL, withIntermediateDirectories: true)
 
         // Track used filenames to handle collisions
@@ -1382,10 +1411,11 @@ class ExportViewModel: ObservableObject {
                 let fileURL = attachmentsURL.appendingPathComponent(finalFilename)
 
                 // Write attachment to disk
-                try data.write(to: fileURL)
+                try ExportWriteBoundary.validate(fileURL, root: writeRoot)
+                try data.write(to: fileURL, options: .atomic)
 
                 // Set attachment timestamps to match note's dates
-                try setFileTimestamps(fileURL, creationDate: noteCreationDate, modificationDate: noteModificationDate)
+                try setFileTimestamps(fileURL, creationDate: noteCreationDate, modificationDate: noteModificationDate, rootURL: writeRoot)
 
                 log("✓ Exported attachment: \(finalFilename) for note '\(noteTitle)'")
 
@@ -1424,7 +1454,7 @@ class ExportViewModel: ObservableObject {
 
         // Set attachments folder timestamps to match note's dates
         if !fileAttachments.isEmpty {
-            try setFileTimestamps(attachmentsURL, creationDate: noteCreationDate, modificationDate: noteModificationDate)
+            try setFileTimestamps(attachmentsURL, creationDate: noteCreationDate, modificationDate: noteModificationDate, rootURL: writeRoot)
         }
     }
 
@@ -1888,7 +1918,8 @@ class ExportViewModel: ObservableObject {
     }
 
     /// Set file creation and modification timestamps
-    private func setFileTimestamps(_ fileURL: URL, creationDate: Date, modificationDate: Date) throws {
+    private func setFileTimestamps(_ fileURL: URL, creationDate: Date, modificationDate: Date, rootURL: URL) throws {
+        try ExportWriteBoundary.validate(fileURL, root: rootURL)
         let attributes: [FileAttributeKey: Any] = [
             .creationDate: creationDate,
             .modificationDate: modificationDate
@@ -1915,7 +1946,7 @@ class ExportViewModel: ObservableObject {
                 let latestModification = notes.map { $0.modificationDate }.max() ?? Date()
 
                 // Set folder timestamps
-                try setFileTimestamps(folderURL, creationDate: oldestCreation, modificationDate: latestModification)
+                try setFileTimestamps(folderURL, creationDate: oldestCreation, modificationDate: latestModification, rootURL: outputURL)
 
                 // Track for account-level timestamps
                 if accountOldestCreation == nil || oldestCreation < accountOldestCreation! {
@@ -1929,7 +1960,7 @@ class ExportViewModel: ObservableObject {
             // Set account folder timestamps
             if let oldestCreation = accountOldestCreation,
                let latestModification = accountLatestModification {
-                try setFileTimestamps(accountURL, creationDate: oldestCreation, modificationDate: latestModification)
+                try setFileTimestamps(accountURL, creationDate: oldestCreation, modificationDate: latestModification, rootURL: outputURL)
             }
         }
     }
@@ -2567,7 +2598,7 @@ class ExportViewModel: ObservableObject {
     }
 
     private func outputURL(forManifestPath relativePath: String, inside outputRootURL: URL) -> URL? {
-        let candidateURL = outputRootURL.appendingPathComponent(relativePath).standardizedFileURL
+        let candidateURL = outputRootURL.appendingPathComponent(relativePath)
         guard isURLInsideDirectory(candidateURL, directoryURL: outputRootURL) else {
             return nil
         }
@@ -2575,6 +2606,8 @@ class ExportViewModel: ObservableObject {
     }
 
     private func isURLInsideDirectory(_ url: URL, directoryURL: URL) -> Bool {
+        guard !url.pathComponents.contains(".."),
+              !directoryURL.pathComponents.contains("..") else { return false }
         func pathIsInside(_ targetURL: URL, directory baseURL: URL) -> Bool {
             let baseComponents = baseURL.standardizedFileURL.pathComponents
             let targetComponents = targetURL.standardizedFileURL.pathComponents

@@ -42,6 +42,365 @@ private final class CollisionTestRepository: MockNotesRepository {
 final class Apple_Notes_ExporterTests: XCTestCase {
 
     @MainActor
+    func testCLIStartupRunsOnceWithoutAWindow() async {
+        let delegate = AppDelegate()
+        let finished = expectation(description: "Headless launch")
+        var calls = 0
+        let args = ["exporter", "--export", "--output", "/tmp/synthetic-export", "--incremental", "--obsidian-links"]
+        let run: @MainActor (LaunchExportOptions) async -> Void = { options in
+            calls += 1
+            XCTAssertTrue(options.incrementalSync)
+            XCTAssertEqual(options.obsidianInternalLinksInMarkdown, true)
+            XCTAssertEqual(options.outputURL.path, "/tmp/synthetic-export")
+            XCTAssertFalse(delegate.applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared))
+            finished.fulfill()
+        }
+        delegate.startLaunchExport(arguments: args, run: run)
+        delegate.startLaunchExport(arguments: args, run: run)
+        await fulfillment(of: [finished], timeout: 2)
+        XCTAssertEqual(calls, 1)
+    }
+
+    @MainActor
+    func testGUIStartupDoesNotScheduleCLIExport() async {
+        let delegate = AppDelegate()
+        delegate.startLaunchExport(arguments: ["exporter"]) { _ in
+            XCTFail("Normal GUI launch must not export")
+        }
+        await Task.yield()
+        XCTAssertTrue(delegate.applicationShouldTerminateAfterLastWindowClosed(NSApplication.shared))
+    }
+
+    func testWriteBoundaryRejectsTraversalLinksAndAllowsNormalNewPaths() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("export")
+        let outside = base.appendingPathComponent("outside")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+        XCTAssertNoThrow(try ExportWriteBoundary.validate(root.appendingPathComponent("new/note.md"), root: root))
+        XCTAssertThrowsError(try ExportWriteBoundary.validate(root.appendingPathComponent("../outside/note.md"), root: root))
+        XCTAssertThrowsError(try ExportWriteBoundary.validate(base.appendingPathComponent("export-other/note.md"), root: root))
+        for (name, destination) in [("escape", outside), ("dangling", outside.appendingPathComponent("absent")), ("inside", root)] {
+            let link = root.appendingPathComponent(name)
+            try fm.createSymbolicLink(at: link, withDestinationURL: destination)
+            XCTAssertThrowsError(try ExportWriteBoundary.validate(link.appendingPathComponent("note.md"), root: root))
+        }
+        let sentinel = outside.appendingPathComponent("sentinel")
+        try Data("unchanged".utf8).write(to: sentinel)
+        let hardlink = root.appendingPathComponent("hardlink")
+        try fm.linkItem(at: sentinel, to: hardlink)
+        XCTAssertThrowsError(try ExportWriteBoundary.validate(hardlink, root: root))
+        let linkedRoot = base.appendingPathComponent("linked-root")
+        try fm.createSymbolicLink(at: linkedRoot, withDestinationURL: root)
+        XCTAssertThrowsError(try ExportWriteBoundary.validate(linkedRoot.appendingPathComponent("note.md"), root: linkedRoot))
+        XCTAssertEqual(try String(contentsOf: sentinel, encoding: .utf8), "unchanged")
+    }
+
+    @MainActor
+    func testManifestParentTraversalStopsExportBeforeWritesAndPruning() async throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("export")
+        let folder = root.appendingPathComponent("Test/Folder")
+        let outside = base.appendingPathComponent("outside")
+        let child = outside.appendingPathComponent("child")
+        try fm.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+        try fm.createDirectory(at: child, withIntermediateDirectories: true)
+        let link = folder.appendingPathComponent("redirect")
+        try fm.createSymbolicLink(at: link, withDestinationURL: child)
+        let relative = "Test/Folder/redirect/../First.md"
+        let target = root.appendingPathComponent(relative)
+        let sentinel = outside.appendingPathComponent("First.md")
+        let inside = folder.appendingPathComponent("First.md")
+        let original = Data("untouched".utf8)
+        try original.write(to: inside)
+        let repository = MockNotesRepository()
+        repository.mockAccounts = [NotesAccount(id: "account-1", name: "Test", identifier: "test", accountType: .local)]
+        repository.mockFolders = [NotesFolder(id: "folder-1", name: "Folder", parentId: nil, accountId: "account-1")]
+        let model = ExportViewModel(repository: repository, databasePath: ":memory:")
+        model.configurations = .default
+        model.configurations.incrementalSync = true
+        model.configurations.addDateToFilename = false
+        let note = makeNote(id: "first", title: "First")
+        for existing in [false, true] {
+            if existing { try original.write(to: sentinel) }
+            XCTAssertThrowsError(try ExportWriteBoundary.validate(target, root: root))
+            let unsafeRoot = link.appendingPathComponent("..")
+            XCTAssertThrowsError(try ExportWriteBoundary.validate(target, root: unsafeRoot))
+            for staleAttachment in [false, true] {
+                var manifest = SyncManifest.empty()
+                manifest.recordExport(noteId: staleAttachment ? "deleted" : note.id,
+                                      modificationDate: .distantPast,
+                                      exportedPath: staleAttachment ? "Test/Folder/old.md" : relative,
+                                      attachmentPaths: staleAttachment ? [relative] : [])
+                try manifest.save(to: root)
+                let watermark = root.appendingPathComponent(SyncManifest.filename)
+                let before = try Data(contentsOf: watermark)
+                await model.exportNotes([note], toDirectory: root, format: .markdown)
+                guard case .error = model.exportState else { return XCTFail("Unsafe manifest must abort sync") }
+                XCTAssertEqual(try Data(contentsOf: watermark), before)
+                _ = try model.removeManifestEntriesNotInCurrentExportSet(from: &manifest, currentNoteIDs: [], outputRootURL: root)
+                XCTAssertEqual(try Data(contentsOf: inside), original)
+                if existing { XCTAssertEqual(try Data(contentsOf: sentinel), original) }
+                else { XCTAssertFalse(fm.fileExists(atPath: sentinel.path)) }
+            }
+        }
+    }
+
+    func testManifestWriteRejectsSymlinkWithoutChangingOutsideFile() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let root = base.appendingPathComponent("export")
+        try fm.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: base) }
+        let sentinel = base.appendingPathComponent("sentinel")
+        try Data("outside".utf8).write(to: sentinel)
+        try fm.createSymbolicLink(at: root.appendingPathComponent(SyncManifest.filename), withDestinationURL: sentinel)
+        XCTAssertThrowsError(try SyncManifest.empty().save(to: root))
+        XCTAssertNil(SyncManifest.load(from: root))
+        XCTAssertEqual(try String(contentsOf: sentinel, encoding: .utf8), "outside")
+    }
+
+    @MainActor
+    func testNoteAndConcatenatedTargetsCannotChangeOutsideFile() async throws {
+        for concatenate in [false, true] {
+            let fm = FileManager.default
+            let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            let root = base.appendingPathComponent("export")
+            try fm.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? fm.removeItem(at: base) }
+            let repository = MockNotesRepository()
+            repository.mockAccounts = [NotesAccount(id: "account-1", name: "Test", identifier: "test", accountType: .local)]
+            repository.mockFolders = [NotesFolder(id: "folder-1", name: "Folder", parentId: nil, accountId: "account-1")]
+            let model = ExportViewModel(repository: repository, databasePath: ":memory:")
+            model.configurations = .default
+            model.configurations.addDateToFilename = false
+            model.configurations.incrementalSync = !concatenate
+            model.configurations.concatenateOutput = concatenate
+            let note = makeNote(id: "first", title: "First")
+            await model.exportNotes([note], toDirectory: root, format: .markdown)
+            let relativePath = concatenate ? "Exported Notes.md" :
+                try XCTUnwrap(SyncManifest.load(from: root)?.notes[note.id]?.exportedPath)
+            let target = root.appendingPathComponent(relativePath)
+            try fm.removeItem(at: target)
+            let sentinel = base.appendingPathComponent("sentinel")
+            try Data("outside".utf8).write(to: sentinel)
+            let before = try fm.attributesOfItem(atPath: sentinel.path)[.modificationDate] as? Date
+            try fm.createSymbolicLink(at: target, withDestinationURL: sentinel)
+            // Different source fingerprint forces a write attempt for the existing manifest path.
+            let changed = makeNote(id: "first", title: "First", plaintext: "changed body")
+            await model.exportNotes([changed], toDirectory: root, format: .markdown)
+            XCTAssertEqual(try String(contentsOf: sentinel, encoding: .utf8), "outside")
+            XCTAssertEqual(try fm.attributesOfItem(atPath: sentinel.path)[.modificationDate] as? Date, before)
+            if case .completed(let stats) = model.exportState {
+                XCTAssertGreaterThan(stats.failedNotes, 0)
+            } else if case .error = model.exportState {
+            } else {
+                XCTFail("Redirected note output must fail")
+            }
+        }
+    }
+
+    @MainActor
+    func testFullExportCannotWriteThroughFolderOrAttachmentLinks() async throws {
+        for linkedPath in ["Test/Folder", "Test/Folder/First (Attachments)", "Test/Folder/First (Attachments)/test.bin"] {
+            let fm = FileManager.default
+            let base = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            let root = base.appendingPathComponent("export")
+            let outside = base.appendingPathComponent("outside")
+            let link = root.appendingPathComponent(linkedPath)
+            try fm.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+            defer { try? fm.removeItem(at: base) }
+            let sentinel = outside.appendingPathComponent("sentinel")
+            try Data("outside".utf8).write(to: sentinel)
+            let before = try fm.attributesOfItem(atPath: sentinel.path)[.modificationDate] as? Date
+            try fm.createSymbolicLink(at: link, withDestinationURL: linkedPath.hasSuffix(".bin") ? sentinel : outside)
+            let repository = MockNotesRepository()
+            repository.mockAccounts = [NotesAccount(id: "account-1", name: "Test", identifier: "test", accountType: .local)]
+            repository.mockFolders = [NotesFolder(id: "folder-1", name: "Folder", parentId: nil, accountId: "account-1")]
+            repository.mockAttachmentData = Data("attachment".utf8)
+            let model = ExportViewModel(repository: repository, databasePath: ":memory:")
+            model.configurations = .default
+            model.configurations.incrementalSync = true
+            model.configurations.addDateToFilename = false
+            let note = makeNote(id: "first", title: "First", attachments: [
+                NotesAttachment(id: "file", typeUTI: "public.data", filename: "test.bin")
+            ])
+            await model.exportNotes([note], toDirectory: root, format: .markdown)
+            XCTAssertEqual(try fm.contentsOfDirectory(atPath: outside.path), ["sentinel"])
+            XCTAssertEqual(try String(contentsOf: sentinel, encoding: .utf8), "outside")
+            XCTAssertEqual(try fm.attributesOfItem(atPath: sentinel.path)[.modificationDate] as? Date, before)
+            if case .completed(let stats) = model.exportState {
+                XCTAssertGreaterThan(stats.failedNotes + stats.failedAttachments, 0)
+            } else if case .error = model.exportState {
+                // Directory guards abort the export before writing notes.
+            } else {
+                XCTFail("Unsafe output must report failure")
+            }
+        }
+    }
+    func testInventoryBrokenFolderSchemaThrowsInsteadOfEmptySuccess() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let database = base.appendingPathComponent("NoteStore.sqlite")
+        try createModernNotesDatabase(at: database, additionalSQL: "ALTER TABLE ZICCLOUDSYNCINGOBJECT DROP COLUMN ZPARENT;")
+        do {
+            let folders = try await DatabaseNotesRepository(databasePath: database.path).fetchFolders()
+            XCTFail("Broken folder query returned success with \(folders.count) folders")
+        } catch {
+            // Expected: incompatible schema must fail closed before mirror planning.
+        }
+    }
+
+    func testInventoryPartialNoteQueryMustThrow() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let database = base.appendingPathComponent("NoteStore.sqlite")
+        try createModernNotesDatabase(at: database, additionalSQL: """
+            WITH RECURSIVE numbers(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM numbers WHERE x < 1000)
+            INSERT INTO ZICCLOUDSYNCINGOBJECT
+                (Z_PK, Z_ENT, ZIDENTIFIER, ZTITLE2, ZCREATIONDATE1, ZMODIFICATIONDATE1, ZFOLDER, ZACCOUNT2, ZMARKEDFORDELETION)
+            SELECT x, 1, 'note-' || x, 'Synthetic ' || x, 10, 20, 50, 100, 0 FROM numbers;
+            """)
+        let db = try XCTUnwrap(ane_open(database.path))
+        defer { ane_close(db) }
+        let sqlite = OpaquePointer(try XCTUnwrap(ane_get_sqlite_handle(db)))
+        let remaining = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
+        remaining.initialize(to: 5000)
+        defer { remaining.deinitialize(count: 1); remaining.deallocate() }
+        sqlite3_progress_handler(sqlite, 1, { context in
+            guard let remaining = context?.assumingMemoryBound(to: Int32.self) else { return 1 }
+            remaining.pointee -= 1
+            return remaining.pointee <= 0 ? 1 : 0
+        }, remaining)
+        var count = 0
+        let notes = ane_fetch_notes(db, &count)
+        let error = sqlite3_errcode(sqlite)
+        sqlite3_progress_handler(sqlite, 0, nil, nil)
+        defer { if let notes { ane_free_notes(notes, count) } }
+        XCTAssertEqual(error, SQLITE_INTERRUPT)
+        XCTAssertNil(notes)
+        XCTAssertEqual(count, 0)
+        var retryCount = 0
+        let retry = try XCTUnwrap(ane_fetch_notes(db, &retryCount))
+        defer { ane_free_notes(retry, retryCount) }
+        XCTAssertEqual(retryCount, 1000)
+    }
+
+    func testEmptyInventoryIsSuccessful() async throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let database = base.appendingPathComponent("NoteStore.sqlite")
+        try createModernNotesDatabase(at: database, additionalSQL: "")
+        let repository = DatabaseNotesRepository(databasePath: database.path)
+        let accounts = try await repository.fetchAccounts()
+        let folders = try await repository.fetchFolders()
+        let notes = try await repository.fetchNotes()
+        XCTAssertTrue(accounts.isEmpty)
+        XCTAssertTrue(folders.isEmpty)
+        XCTAssertTrue(notes.isEmpty)
+    }
+
+    @MainActor
+    func testBrokenInventoryQueriesThrow() async throws {
+        for column in ["ZNAME", "ZPARENT", "ZTITLE2"] {
+            let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: base) }
+            let database = base.appendingPathComponent("NoteStore.sqlite")
+            let mutation = column == "ZTITLE2"
+                ? "ALTER TABLE ZICNOTEDATA DROP COLUMN ZDATA;"
+                : "ALTER TABLE ZICCLOUDSYNCINGOBJECT DROP COLUMN \(column);"
+            try createModernNotesDatabase(at: database, additionalSQL: mutation)
+            let repository = DatabaseNotesRepository(databasePath: database.path)
+            do {
+                switch column {
+                case "ZNAME": _ = try await repository.fetchAccounts()
+                case "ZPARENT": _ = try await repository.fetchFolders()
+                default: _ = try await repository.fetchNotes()
+                }
+                XCTFail("Invalid inventory schema must throw: \(column)")
+            } catch RepositoryError.inventoryReadFailed { }
+            let model = NotesViewModel(repository: repository)
+            await model.loadNotes()
+            XCTAssertNotNil(model.loadingState.errorMessage)
+            XCTAssertTrue(model.selectedNotes.isEmpty)
+        }
+    }
+
+    func testInterruptedAccountFolderAndRangeQueriesDiscardRowsAndRetry() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let database = base.appendingPathComponent("NoteStore.sqlite")
+        try createModernNotesDatabase(at: database, additionalSQL: """
+            WITH RECURSIVE numbers(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM numbers WHERE x < 1000)
+            INSERT INTO ZICCLOUDSYNCINGOBJECT
+                (Z_PK, Z_ENT, ZIDENTIFIER, ZNAME, ZTITLE2, ZCREATIONDATE1, ZMODIFICATIONDATE1, ZFOLDER, ZACCOUNT2, ZMARKEDFORDELETION)
+            SELECT x, 1, 'note-' || x, 'Account', 'Synthetic', 10, 20, 50, 100, 0 FROM numbers;
+            UPDATE ZICCLOUDSYNCINGOBJECT SET ZNAME = 'Account', ZTITLE = 'Synthetic',
+                ZTITLE1 = 'Synthetic', ZTITLE2 = 'Synthetic';
+            """)
+        let db = try XCTUnwrap(ane_open(database.path))
+        defer { ane_close(db) }
+        let sqlite = OpaquePointer(try XCTUnwrap(ane_get_sqlite_handle(db)))
+        // Populate each entity before its read; interrupted statements must also be reusable.
+        for entity in [3, 4, 1] {
+            var writer: OpaquePointer?
+            XCTAssertEqual(sqlite3_open(database.path, &writer), SQLITE_OK)
+            let writable = try XCTUnwrap(writer)
+            try executeSQL("UPDATE ZICCLOUDSYNCINGOBJECT SET Z_ENT = \(entity);", in: writable)
+            sqlite3_close(writable)
+            var budget: Int32 = 5000
+            withUnsafeMutablePointer(to: &budget) { remaining in
+                sqlite3_progress_handler(sqlite, 1, { context in
+                    let value = context!.assumingMemoryBound(to: Int32.self)
+                    value.pointee -= 1
+                    return value.pointee <= 0 ? 1 : 0
+                }, remaining)
+                defer { sqlite3_progress_handler(sqlite, 0, nil, nil) }
+                var count = 99
+                switch entity {
+                case 3:
+                    let rows = ane_fetch_accounts(db, &count)
+                    defer { if let rows { ane_free_accounts(rows, count) } }
+                    XCTAssertNil(rows)
+                case 4:
+                    let rows = ane_fetch_folders(db, &count)
+                    defer { if let rows { ane_free_folders(rows, count) } }
+                    XCTAssertNil(rows)
+                default:
+                    let rows = ane_fetch_notes_in_range(db, 0, 0, &count)
+                    defer { if let rows { ane_free_notes(rows, count) } }
+                    XCTAssertNil(rows)
+                }
+                XCTAssertEqual(sqlite3_errcode(sqlite), SQLITE_INTERRUPT)
+                XCTAssertEqual(count, 0)
+            }
+            var count = 0
+            switch entity {
+            case 3:
+                let rows = try XCTUnwrap(ane_fetch_accounts(db, &count))
+                ane_free_accounts(rows, count)
+            case 4:
+                let rows = try XCTUnwrap(ane_fetch_folders(db, &count))
+                ane_free_folders(rows, count)
+            default:
+                let rows = try XCTUnwrap(ane_fetch_notes_in_range(db, 0, 0, &count))
+                ane_free_notes(rows, count)
+            }
+            XCTAssertEqual(count, 1000)
+        }
+    }
+
+    @MainActor
     func testNewDuplicateCannotClaimExistingNotesExport() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)

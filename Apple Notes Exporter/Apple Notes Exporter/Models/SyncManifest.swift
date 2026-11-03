@@ -20,6 +20,53 @@
 
 import Foundation
 
+/// Reject redirected output paths before filesystem mutations.
+/// This is a preflight guard, not protection against concurrent filesystem tampering.
+enum ExportWriteBoundary {
+    struct UnsafePath: LocalizedError {
+        var errorDescription: String? {
+            "Export stopped: an output path escapes the selected folder or uses a filesystem link."
+        }
+    }
+
+    static func validate(_ target: URL, root: URL) throws {
+        // A symlink followed by ".." can resolve differently at write time.
+        // Inspect the original components before Foundation collapses them.
+        guard target.isFileURL, root.isFileURL,
+              !target.pathComponents.contains(".."),
+              !root.pathComponents.contains("..") else { throw UnsafePath() }
+        let base = root.standardizedFileURL
+        let destination = target.standardizedFileURL
+        let baseParts = base.pathComponents
+        let parts = destination.pathComponents
+        guard parts.count >= baseParts.count,
+              Array(parts.prefix(baseParts.count)) == baseParts else { throw UnsafePath() }
+
+        // Check each existing component, including dangling symlinks and the root.
+        var current = base
+        let suffix = Array(parts.dropFirst(baseParts.count))
+        for component in [String?](arrayLiteral: nil) + suffix.map({ Optional($0) }) {
+            if let component { current.appendPathComponent(component) }
+            do {
+                let attributes = try FileManager.default.attributesOfItem(atPath: current.path)
+                if attributes[.type] as? FileAttributeType == .typeSymbolicLink {
+                    throw UnsafePath()
+                }
+                if attributes[.type] as? FileAttributeType == .typeRegular,
+                   let links = attributes[.referenceCount] as? NSNumber, links.intValue > 1 {
+                    throw UnsafePath()
+                }
+            } catch let error as CocoaError where error.code == .fileReadNoSuchFile {
+                // New directories and output files are allowed.
+            }
+        }
+        let resolvedBase = base.resolvingSymlinksInPath().pathComponents
+        let resolvedTarget = destination.resolvingSymlinksInPath().pathComponents
+        guard resolvedTarget.count >= resolvedBase.count,
+              Array(resolvedTarget.prefix(resolvedBase.count)) == resolvedBase else { throw UnsafePath() }
+    }
+}
+
 // MARK: - Sync Manifest
 
 enum ExportPathIdentity {
@@ -72,6 +119,7 @@ struct SyncManifest: Codable {
     /// Load manifest from a directory, returns nil if not found or unreadable
     static func load(from directory: URL) -> SyncManifest? {
         let fileURL = directory.appendingPathComponent(filename)
+        guard (try? ExportWriteBoundary.validate(fileURL, root: directory)) != nil else { return nil }
         guard let data = try? Data(contentsOf: fileURL) else { return nil }
 
         let decoder = JSONDecoder()
@@ -82,6 +130,7 @@ struct SyncManifest: Codable {
     /// Save manifest to a directory (atomic write)
     func save(to directory: URL) throws {
         let fileURL = directory.appendingPathComponent(SyncManifest.filename)
+        try ExportWriteBoundary.validate(fileURL, root: directory)
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .secondsSince1970
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

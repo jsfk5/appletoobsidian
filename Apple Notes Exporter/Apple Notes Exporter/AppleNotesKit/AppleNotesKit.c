@@ -903,8 +903,9 @@ static const char *_resolve_uti_col(const ane_db *db)
 
 ane_account *ane_fetch_accounts(ane_db *db, size_t *count)
 {
-    if (!db || !count) return NULL;
+    if (!count) return NULL;
     *count = 0;
+    if (!db) return NULL;
 
     int is_legacy = (db->version == ANE_VERSION_LEGACY);
     sqlite3_stmt *stmt = is_legacy
@@ -920,12 +921,17 @@ ane_account *ane_fetch_accounts(ane_db *db, size_t *count)
     ane_account *accounts = (ane_account *)calloc(capacity, sizeof(ane_account));
     if (!accounts) return NULL;
 
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
+    int status;
+    while ((status = sqlite3_step(stmt)) == SQLITE_ROW) {
         if (*count >= capacity) {
             capacity *= 2;
             ane_account *na = (ane_account *)realloc(accounts,
                 capacity * sizeof(ane_account));
-            if (!na) break;
+            if (!na) {
+                ane_free_accounts(accounts, *count);
+                *count = 0;
+                return NULL;
+            }
             accounts = na;
         }
 
@@ -938,8 +944,19 @@ ane_account *ane_fetch_accounts(ane_db *db, size_t *count)
             : -1;
 
         (*count)++;
+        if ((sqlite3_column_type(stmt, 1) != SQLITE_NULL && !a->identifier) ||
+            (sqlite3_column_type(stmt, 2) != SQLITE_NULL && !a->name)) {
+            ane_free_accounts(accounts, *count);
+            *count = 0;
+            return NULL;
+        }
     }
 
+    if (status != SQLITE_DONE) {
+        ane_free_accounts(accounts, *count);
+        *count = 0;
+        return NULL;
+    }
     return accounts;
 }
 
@@ -947,8 +964,9 @@ ane_account *ane_fetch_accounts(ane_db *db, size_t *count)
 
 ane_folder *ane_fetch_folders(ane_db *db, size_t *count)
 {
-    if (!db || !count) return NULL;
+    if (!count) return NULL;
     *count = 0;
+    if (!db) return NULL;
 
     int is_legacy = (db->version == ANE_VERSION_LEGACY);
     sqlite3_stmt *stmt = is_legacy
@@ -962,12 +980,17 @@ ane_folder *ane_fetch_folders(ane_db *db, size_t *count)
     ane_folder *folders = (ane_folder *)calloc(capacity, sizeof(ane_folder));
     if (!folders) return NULL;
 
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
+    int status;
+    while ((status = sqlite3_step(stmt)) == SQLITE_ROW) {
         if (*count >= capacity) {
             capacity *= 2;
             ane_folder *nf = (ane_folder *)realloc(folders,
                 capacity * sizeof(ane_folder));
-            if (!nf) break;
+            if (!nf) {
+                ane_free_folders(folders, *count);
+                *count = 0;
+                return NULL;
+            }
             folders = nf;
         }
 
@@ -982,8 +1005,18 @@ ane_folder *ane_fetch_folders(ane_db *db, size_t *count)
         f->account_id = NULL;  /* resolved later by caller */
 
         (*count)++;
+        if (sqlite3_column_type(stmt, 1) != SQLITE_NULL && !f->title) {
+            ane_free_folders(folders, *count);
+            *count = 0;
+            return NULL;
+        }
     }
 
+    if (status != SQLITE_DONE) {
+        ane_free_folders(folders, *count);
+        *count = 0;
+        return NULL;
+    }
     return folders;
 }
 
@@ -992,8 +1025,9 @@ ane_folder *ane_fetch_folders(ane_db *db, size_t *count)
 static ane_note *_fetch_notes_impl(ane_db *db, sqlite3_stmt *stmt,
                                     size_t *count)
 {
-    if (!db || !stmt || !count) return NULL;
+    if (!count) return NULL;
     *count = 0;
+    if (!db || !stmt) return NULL;
 
     int has_password = _has_column(db, "ZPASSWORDPROTECTED");
     sqlite3_reset(stmt);
@@ -1002,12 +1036,17 @@ static ane_note *_fetch_notes_impl(ane_db *db, sqlite3_stmt *stmt,
     ane_note *notes = (ane_note *)calloc(capacity, sizeof(ane_note));
     if (!notes) return NULL;
 
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
+    int status;
+    while ((status = sqlite3_step(stmt)) == SQLITE_ROW) {
         if (*count >= capacity) {
             capacity *= 2;
             ane_note *nn = (ane_note *)realloc(notes,
                 capacity * sizeof(ane_note));
-            if (!nn) break;
+            if (!nn) {
+                ane_free_notes(notes, *count);
+                *count = 0;
+                return NULL;
+            }
             notes = nn;
         }
 
@@ -1044,15 +1083,28 @@ static ane_note *_fetch_notes_impl(ane_db *db, sqlite3_stmt *stmt,
             : 0;
 
         (*count)++;
+        if ((sqlite3_column_type(stmt, 1) != SQLITE_NULL && !n->identifier) ||
+            (sqlite3_column_type(stmt, 2) != SQLITE_NULL && !n->title) ||
+            (sqlite3_column_bytes(stmt, 7) > 0 && !n->protobuf_data)) {
+            ane_free_notes(notes, *count);
+            *count = 0;
+            return NULL;
+        }
     }
 
+    if (status != SQLITE_DONE) {
+        ane_free_notes(notes, *count);
+        *count = 0;
+        return NULL;
+    }
     return notes;
 }
 
 static ane_note *_fetch_legacy_notes(ane_db *db, size_t *count)
 {
-    if (!db || !count) return NULL;
+    if (!count) return NULL;
     *count = 0;
+    if (!db) return NULL;
 
     sqlite3_stmt *stmt = db->stmts[STMT_LEGACY_NOTES];
     if (!stmt) return NULL;
@@ -1063,12 +1115,17 @@ static ane_note *_fetch_legacy_notes(ane_db *db, size_t *count)
     ane_note *notes = (ane_note *)calloc(capacity, sizeof(ane_note));
     if (!notes) return NULL;
 
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
+    int status;
+    while ((status = sqlite3_step(stmt)) == SQLITE_ROW) {
         if (*count >= capacity) {
             capacity *= 2;
             ane_note *nn = (ane_note *)realloc(notes,
                 capacity * sizeof(ane_note));
-            if (!nn) break;
+            if (!nn) {
+                ane_free_notes(notes, *count);
+                *count = 0;
+                return NULL;
+            }
             notes = nn;
         }
 
@@ -1086,6 +1143,8 @@ static ane_note *_fetch_legacy_notes(ane_db *db, size_t *count)
         n->title = _strdup_col(stmt, 4);
 
         /* Legacy ZDATA is raw text content, not gzipped protobuf */
+        n->protobuf_data = NULL;
+        n->protobuf_len = 0;
         const unsigned char *text = sqlite3_column_text(stmt, 5);
         if (text) {
             size_t len = strlen((const char *)text);
@@ -1115,14 +1174,28 @@ static ane_note *_fetch_legacy_notes(ane_db *db, size_t *count)
             : sqlite3_column_int64(stmt, 7);
 
         (*count)++;
+        if ((sqlite3_column_type(stmt, 1) != SQLITE_NULL && !n->identifier) ||
+            (sqlite3_column_type(stmt, 4) != SQLITE_NULL && !n->title) ||
+            (sqlite3_column_bytes(stmt, 5) > 0 && !n->protobuf_data)) {
+            ane_free_notes(notes, *count);
+            *count = 0;
+            return NULL;
+        }
     }
 
+    if (status != SQLITE_DONE) {
+        ane_free_notes(notes, *count);
+        *count = 0;
+        return NULL;
+    }
     return notes;
 }
 
 ane_note *ane_fetch_notes(ane_db *db, size_t *count)
 {
-    if (!db || !count) return NULL;
+    if (!count) return NULL;
+    *count = 0;
+    if (!db) return NULL;
 
     if (db->version == ANE_VERSION_LEGACY)
         return _fetch_legacy_notes(db, count);
@@ -1135,8 +1208,9 @@ ane_note *ane_fetch_notes_in_range(ane_db *db,
                                     double range_end_unix,
                                     size_t *count)
 {
-    if (!db || !count) return NULL;
+    if (!count) return NULL;
     *count = 0;
+    if (!db) return NULL;
 
     /* Legacy doesn't support date range filtering */
     if (db->version == ANE_VERSION_LEGACY)
@@ -1147,7 +1221,7 @@ ane_note *ane_fetch_notes_in_range(ane_db *db,
         return _fetch_notes_impl(db, db->stmts[STMT_NOTES], count);
 
     sqlite3_stmt *stmt = db->stmts[STMT_NOTES_RANGE];
-    if (!stmt) return ane_fetch_notes(db, count);
+    if (!stmt) return NULL;
 
     /* Convert Unix timestamps to CoreTime */
     double start_core = range_start_unix > 0
@@ -1158,8 +1232,8 @@ ane_note *ane_fetch_notes_in_range(ane_db *db,
         : (double)time(NULL) - ANE_CORETIME_EPOCH;
 
     sqlite3_reset(stmt);
-    sqlite3_bind_double(stmt, 1, start_core);
-    sqlite3_bind_double(stmt, 2, end_core);
+    if (sqlite3_bind_double(stmt, 1, start_core) != SQLITE_OK ||
+        sqlite3_bind_double(stmt, 2, end_core) != SQLITE_OK) return NULL;
 
     /* The range statement has the same column layout as STMT_NOTES */
     int has_password = _has_column(db, "ZPASSWORDPROTECTED");
@@ -1168,12 +1242,17 @@ ane_note *ane_fetch_notes_in_range(ane_db *db,
     ane_note *notes = (ane_note *)calloc(capacity, sizeof(ane_note));
     if (!notes) return NULL;
 
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
+    int status;
+    while ((status = sqlite3_step(stmt)) == SQLITE_ROW) {
         if (*count >= capacity) {
             capacity *= 2;
             ane_note *nn = (ane_note *)realloc(notes,
                 capacity * sizeof(ane_note));
-            if (!nn) break;
+            if (!nn) {
+                ane_free_notes(notes, *count);
+                *count = 0;
+                return NULL;
+            }
             notes = nn;
         }
 
@@ -1205,8 +1284,20 @@ ane_note *ane_fetch_notes_in_range(ane_db *db,
             : 0;
 
         (*count)++;
+        if ((sqlite3_column_type(stmt, 1) != SQLITE_NULL && !n->identifier) ||
+            (sqlite3_column_type(stmt, 2) != SQLITE_NULL && !n->title) ||
+            (sqlite3_column_bytes(stmt, 7) > 0 && !n->protobuf_data)) {
+            ane_free_notes(notes, *count);
+            *count = 0;
+            return NULL;
+        }
     }
 
+    if (status != SQLITE_DONE) {
+        ane_free_notes(notes, *count);
+        *count = 0;
+        return NULL;
+    }
     return notes;
 }
 
